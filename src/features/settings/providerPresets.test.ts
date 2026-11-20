@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  CCPL_BASE_URL,
   PRESETS,
   buildCodexConfigToml,
   claudeTemplateJson,
@@ -30,5 +31,36 @@ describe("API Route preset configuration", () => {
     expect(config).toContain("requires_openai_auth = true");
     expect(config).not.toContain("disable_response_storage");
     expect(findMatchedPreset(PRESETS.codex!, preset.baseUrl)).toBe(preset);
+  });
+});
+
+describe("ccpl preset configuration", () => {
+  it("points Claude Code at the ccpl root so /v1/messages lands on the pool", () => {
+    const preset = PRESETS.claude!.find((p) => p.name === "ccpl")!;
+    const settings = JSON.parse(claudeTemplateJson(preset.baseUrl, "ccpl-token", preset.env));
+    expect(new URL("/v1/messages", settings.env.ANTHROPIC_BASE_URL).href).toBe(
+      `${CCPL_BASE_URL}/v1/messages`,
+    );
+    expect(settings.env.ANTHROPIC_AUTH_TOKEN).toBe("ccpl-token");
+    // ccpl only serves Claude models on the Claude group; no third-party tier names.
+    for (const slot of ["HAIKU", "SONNET", "OPUS"]) {
+      expect(settings.env[`ANTHROPIC_DEFAULT_${slot}_MODEL`]).toMatch(/^claude-/);
+    }
+    expect(findMatchedPreset(PRESETS.claude!, settings.env.ANTHROPIC_BASE_URL)).toBe(preset);
+  });
+
+  it("generates a Codex Responses config on ccpl's /v1", () => {
+    const preset = PRESETS.codex!.find((p) => p.name === "ccpl")!;
+    const config = buildCodexConfigToml(preset.name, preset.baseUrl, preset.model, preset.wireApi ?? "chat");
+    expect(config).toContain(`base_url = "${CCPL_BASE_URL}/v1"`);
+    // ccpl's Codex group only accepts /v1/responses; chat would be rejected.
+    expect(config).toContain('wire_api = "responses"');
+    expect(findMatchedPreset(PRESETS.codex!, preset.baseUrl)).toBe(preset);
+  });
+
+  it("offers ccpl for Grok on /v1 alongside the official endpoint", () => {
+    const names = PRESETS.grok!.map((p) => p.name);
+    expect(names).toEqual(["ccpl", "xAI Official"]);
+    expect(PRESETS.grok![0].baseUrl).toBe(`${CCPL_BASE_URL}/v1`);
   });
 });

@@ -14,7 +14,17 @@ import xiaomimimoIcon from "@lobehub/icons-static-svg/icons/xiaomimimo.svg";
 import zhipuIcon from "@lobehub/icons-static-svg/icons/zhipu-color.svg";
 import requestyIcon from "@/assets/model-icons/requesty.svg";
 import apiRouteIcon from "@/assets/model-icons/api-route.png";
+import ccplIcon from "@/assets/model-icons/ccpl.svg";
 import type { EngineId } from "./providers";
+
+/** ccpl account pool (Claude / Codex / Grok pools behind one token).
+ *  Claude takes the root URL (Claude Code appends /v1/messages); Codex and
+ *  Grok take /v1 and speak the OpenAI Responses / Chat protocols. Which
+ *  engines a token may use is set per group on the ccpl side
+ *  (设置 → 接入): the Claude group accepts Claude Code, the Codex group
+ *  accepts Codex, the Grok group accepts Grok Build by default. Self-hosted
+ *  deployments just edit the URL after picking the preset. */
+export const CCPL_BASE_URL = "https://cc.ponicedance.com:9443";
 
 export interface ProviderPreset {
   /** Brand-literal display name (same convention as CLI_DISPLAY_NAMES). */
@@ -171,6 +181,18 @@ export function authJsonApiKey(authJson: string): string {
  *  from CODEX_PROVIDER_PRESETS (wire_api drives the generated config.toml). */
 export const PRESETS: Partial<Record<EngineId, ProviderPreset[]>> = {
   claude: [
+    {
+      name: "ccpl",
+      baseUrl: CCPL_BASE_URL,
+      model: "claude-sonnet-4-5",
+      iconSrc: ccplIcon,
+      env: {
+        ANTHROPIC_DEFAULT_HAIKU_MODEL: "claude-haiku-4-5",
+        ANTHROPIC_DEFAULT_SONNET_MODEL: "claude-sonnet-4-5",
+        ANTHROPIC_DEFAULT_OPUS_MODEL: "claude-opus-4-5",
+        ANTHROPIC_SMALL_FAST_MODEL: "claude-haiku-4-5",
+      },
+    },
     {
       name: "API Route",
       baseUrl: "https://global.api-route.com",
@@ -335,8 +357,12 @@ export const PRESETS: Partial<Record<EngineId, ProviderPreset[]>> = {
     { name: "Kimi Coding", baseUrl: "https://api.kimi.com/coding/v1", model: "kimi-for-coding", iconSrc: kimiIcon, iconClassName: DARK_MONO_ICON_CLASS },
     { name: "Moonshot", baseUrl: "https://api.moonshot.cn/v1", model: "", iconSrc: moonshotIcon, iconClassName: DARK_MONO_ICON_CLASS },
   ],
-  grok: [{ name: "xAI Official", baseUrl: "https://api.x.ai/v1", model: "grok-build", iconSrc: xaiIcon, iconClassName: DARK_MONO_ICON_CLASS }],
+  grok: [
+    { name: "ccpl", baseUrl: `${CCPL_BASE_URL}/v1`, model: "grok-build", iconSrc: ccplIcon },
+    { name: "xAI Official", baseUrl: "https://api.x.ai/v1", model: "grok-build", iconSrc: xaiIcon, iconClassName: DARK_MONO_ICON_CLASS },
+  ],
   codex: [
+    { name: "ccpl", baseUrl: `${CCPL_BASE_URL}/v1`, model: "gpt-5.1-codex", iconSrc: ccplIcon, wireApi: "responses" },
     { name: "API Route", baseUrl: "https://global.api-route.com/v1", model: "gpt-6.1-sol", iconSrc: apiRouteIcon, wireApi: "responses" },
     { name: "Zhipu GLM", baseUrl: "https://open.bigmodel.cn/api/coding/paas/v4", model: "glm-5.2", iconSrc: zhipuIcon, wireApi: "chat" },
     { name: "Kimi", baseUrl: "https://api.moonshot.cn/v1", model: "kimi-k3", iconSrc: kimiIcon, iconClassName: DARK_MONO_ICON_CLASS, wireApi: "chat" },
