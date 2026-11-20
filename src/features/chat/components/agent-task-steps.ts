@@ -1,0 +1,833 @@
+import { AGENT_STATUS_ROLE, type Message, type TodoItem, type TodosPayload } from "@/lib/ipc";
+
+export type AgentTaskStepState = "active" | "complete";
+
+export interface AgentTaskStep {
+  /** Stable identity across renders (steps only append within a run). */
+  key: string;
+  label: string;
+  state: AgentTaskStepState;
+  /** Subagent type / role, e.g. "code-reviewer", "planner" */
+  subagentType?: string;
+  /** Detailed description or prompt preview */
+  detail?: string;
+  /** The current turn names this agent but no row reports its state. Display
+   *  may infer "complete" from the turn's shape; a status refresh must keep
+   *  asking, or a late background delivery would never settle it. */
+  pending?: boolean;
+}
+
+/**
+ * Live subagent/task detection from the message stream.
+ *
+ * Engine events carry tool calls as `role: "tool"` rows whose text is the
+ * tool label (engine-dependent: Claude "Task" / "Agent" / "Workflow",
+ * pi-family "task · intent", Codex/Grok spawn_* names, Kimi agent swarm).
+ */
+export function isSubagentToolLabel(text: string): boolean {
+  if (!text) return false;
+  // pi-family labels are "name · intent" — match on the tool name head.
+  const head = text.split("·")[0].trim().toLowerCase();
+  const first = head.split(/[\s/\\]+/)[0].replace(/-/g, "_");
+  if (first === "task" || first === "agent" || first === "subagent") return true;
+  if (first === "spawn" || first === "spawn_agent" || first === "spawn_subagent") return true;
+  if (first === "workflow" || first === "run_workflow" || first === "pipeline") return true;
+  if (first === "dispatch" || first === "dispatch_agent" || first === "delegate") return true;
+  if (/^subagent\s*\d+/.test(head)) return true;
+  if (head.includes("spawn agent") || head.includes("spawn subagent")) return true;
+  if (head.includes("agent swarm") || head.includes("agent_swarm")) return true;
+  if (head.includes("workflow") || head.includes("subagent")) return true;
+  return false;
+}
+
+/** Extract descriptive label, role type, and detail from tool call payload. */
+export function extractSubagentTaskInfo(message: Message): {
+  label: string;
+  subagentType?: string;
+  detail?: string;
+} {
+  const args = (message.args && typeof message.args === "object" ? message.args : {}) as Record<string, unknown>;
+
+  const subagentType =
+    typeof args.subagent_type === "string" && args.subagent_type.trim()
+      ? args.subagent_type.trim()
+      : typeof args.type === "string" && args.type.trim()
+        ? args.type.trim()
+        : undefined;
+
+  const descCandidates = [
+    args.description,
+    args.subject,
+    args.activeForm,
+    args.title,
+    args.task,
+    args.prompt,
+  ];
+  let description: string | undefined;
+  for (const c of descCandidates) {
+    if (typeof c === "string" && c.trim()) {
+      description = c.trim();
+      break;
+    }
+  }
+
+  const name = typeof args.name === "string" && args.name.trim() ? args.name.trim() : undefined;
+
+  let label = message.text;
+  if (message.text.includes("·")) {
+    label = message.text;
+  } else if (description) {
+    if (subagentType) {
+      label = `[${subagentType}] ${description}`;
+    } else if (name) {
+      label = `[${name}] ${description}`;
+    } else {
+      label = description;
+    }
+  } else if (subagentType) {
+    label = name ? `[${subagentType}] ${name}` : `[${subagentType}] ${message.text}`;
+  } else if (name) {
+    label = `[${name}] ${message.text}`;
+  }
+
+  let detail: string | undefined;
+  if (typeof args.prompt === "string" && args.prompt.trim() && args.prompt.trim() !== description) {
+    detail = args.prompt.trim();
+  } else if (typeof args.description === "string" && args.description.trim() && args.description.trim() !== description) {
+    detail = args.description.trim();
+  }
+
+  return { label, subagentType, detail };
+}
+
+export type SubagentRef = {
+  id: string;
+  label?: string;
+  agent?: string;
+  detail?: string;
+};
+
+const argText = (value: unknown) =>
+  typeof value === "string" && value.trim() ? value.trim() : undefined;
+
+/** Tool args reach the panel as the harness wrote them, and some runs encode
+ *  an array as its JSON text; a non-array, non-parsing value names nobody. */
+const argArray = (value: unknown): unknown[] => {
+  if (Array.isArray(value)) return value;
+  if (typeof value !== "string") return [];
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+};
+
+/** The agents a `tasks[]` dispatch spells out. This is the only call shape
+ *  that states an agent's kind and assignment, so it is also the source every
+ *  later id-only reference inherits from. */
+function dispatchRefsByIndex(args: unknown): (SubagentRef | undefined)[] {
+  if (!args || typeof args !== "object") return [];
+  return argArray((args as Record<string, unknown>).tasks).map((entry) => {
+    if (!entry || typeof entry !== "object") return undefined;
+    const row = entry as Record<string, unknown>;
+    const id = argText(row.name) ?? argText(row.id) ?? argText(row.label);
+    if (!id) return undefined;
+    return {
+      id,
+      label: argText(row.description) ?? id,
+      agent: argText(row.agent) ?? argText(row.subagent_type),
+      // The assignment is what the panel shows on click, so it stays whole.
+      detail: argText(row.task) ?? argText(row.prompt),
+    };
+  });
+}
+
+export function dispatchRefsFromArgs(args: unknown): SubagentRef[] {
+  return dispatchRefsByIndex(args).filter((ref): ref is SubagentRef => ref !== undefined);
+}
+
+/** OMP progress indexes are zero-based positions in the original tasks array,
+ *  including partial/out-of-order snapshots. `id` is the allocated agent id,
+ *  not the async job handle. Only a singleton is unambiguous without index. */
+function dispatchIdsFromProgress(
+  refs: (SubagentRef | undefined)[],
+  result: unknown,
+): Map<SubagentRef, string> {
+  const ids = new Map<SubagentRef, string>();
+  if (!result || typeof result !== "object") return ids;
+  const details = (result as Record<string, unknown>).details;
+  if (!details || typeof details !== "object") return ids;
+  const progress = (details as Record<string, unknown>).progress;
+  if (!Array.isArray(progress)) return ids;
+  const byIndex = new Map<number, string>();
+  const byId = new Map<string, number>();
+  const ambiguous = new Set<number>();
+  for (const entry of progress) {
+    if (!entry || typeof entry !== "object") continue;
+    const row = entry as Record<string, unknown>;
+    const id = argText(row.id);
+    const index = row.index === undefined && refs.length === 1 && progress.length === 1
+      ? 0
+      : row.index;
+    if (!id || typeof index !== "number" || !Number.isSafeInteger(index) || !refs[index]) continue;
+    if (byIndex.has(index)) ambiguous.add(index);
+    const previous = byId.get(id);
+    if (previous !== undefined && previous !== index) {
+      ambiguous.add(previous);
+      ambiguous.add(index);
+    }
+    byIndex.set(index, id);
+    byId.set(id, index);
+  }
+  for (const [index, id] of byIndex) {
+    const ref = refs[index];
+    if (ref && !ambiguous.has(index)) ids.set(ref, id);
+  }
+  return ids;
+}
+
+/** The ids a coordination (`hub`) call names on its own — a wait, a cancel,
+ *  a targeted roster check. These say who is out there, never what kind of
+ *  agent it is or what it was told to do. */
+function waitIdsFromArgs(args: unknown): string[] {
+  if (!args || typeof args !== "object") return [];
+  const ids: string[] = [];
+  for (const entry of argArray((args as Record<string, unknown>).ids)) {
+    const id = argText(entry);
+    // hub background job handles are processes/waits, not delegated agents.
+    if (id && !/^bg_/i.test(id)) ids.push(id);
+  }
+  return ids;
+}
+
+/** The subagents one delegation call names, in call order. A `task` call
+ *  spells out the agents it spawns under `tasks[]`; a `hub` wait names the
+ *  ids it is waiting on. A call that names none (a roster check, a bare
+ *  delegation) is left to the caller as a single step of its own. */
+export function subagentRefsFromArgs(args: unknown): SubagentRef[] {
+  const refs = dispatchRefsFromArgs(args);
+  for (const id of waitIdsFromArgs(args)) refs.push({ id });
+  return refs;
+}
+
+/** The dispatch behind an id a `hub` call named on its own. The id the run
+ *  reports back is not always the name the dispatch asked for: a re-spawn is
+ *  disambiguated with a numeric suffix, so "PluginReview-2" is the runtime id
+ *  of the agent dispatched as "PluginReview". Only a trailing `-<digits>`
+ *  counts — looser prefix matching would let unrelated agents inherit each
+ *  other's kind and assignment. */
+function resolveDispatch(
+  id: string,
+  dispatched: Map<string, SubagentRef>,
+): SubagentRef | undefined {
+  const exact = dispatched.get(id);
+  if (exact) return exact;
+  const base = id.replace(/-\d+$/, "");
+  return base === id ? undefined : dispatched.get(base);
+}
+
+/** Engine status word → panel state. One table for both the panel and the
+ *  hidden-delivery filter: a word this returns `undefined` for is never
+ *  treated as settled by either side. */
+export function agentState(status: unknown): AgentTaskStepState | undefined {
+  if (typeof status !== "string") return undefined;
+  switch (status.trim().toLowerCase()) {
+    case "active":
+    case "in_progress":
+    case "pending":
+    case "queued":
+    case "running":
+      return "active";
+    case "aborted":
+    case "canceled":
+    case "cancelled":
+    case "complete":
+    case "completed":
+    case "done":
+    case "error":
+    case "errored":
+    case "failed":
+    case "finished":
+    case "idle":
+    case "killed":
+    case "parked":
+    case "stopped":
+    case "succeeded":
+    case "success":
+    case "timed_out":
+    case "timeout":
+      return "complete";
+    default:
+      return undefined;
+  }
+}
+
+/** Shared empty result: most rows carry no tool result, and the fold runs on
+ *  every stream flush, so allocating a Map per row is pure churn. Callers only
+ *  read it. */
+const NO_JOB_STATES: ReadonlyMap<string, AgentTaskStepState> = new Map();
+
+/** Job states from tool results and hidden status deliveries: `details.jobs`
+ *  on a wait, `details.peers` on a roster, `details.progress` on a dispatch.
+ *  Unknown states are ignored instead of being guessed terminal. */
+function jobStatesFromResult(result: unknown): ReadonlyMap<string, AgentTaskStepState> {
+  if (!result || typeof result !== "object") return NO_JOB_STATES;
+  const states = new Map<string, AgentTaskStepState>();
+  const details = (result as Record<string, unknown>).details;
+  if (!details || typeof details !== "object") return NO_JOB_STATES;
+  const buckets = ["jobs", "peers", "progress"].map((key) =>
+    (details as Record<string, unknown>)[key],
+  );
+  for (const bucket of buckets) {
+    if (!Array.isArray(bucket)) continue;
+    for (const entry of bucket) {
+      if (!entry || typeof entry !== "object") continue;
+      const row = entry as Record<string, unknown>;
+      const id = argText(row.id) ?? argText(row.agentId) ?? argText(row.jobId);
+      const state = agentState(row.status);
+      if (id && state) states.set(id, state);
+    }
+  }
+  return states;
+}
+
+/** An unfiltered `hub jobs` result is the complete process-local roster. A
+ *  refresh re-reads such a result as a hidden status row: it keeps its `op`
+ *  and arguments, so absence still means "ended" there. */
+export function isCompleteJobsRoster(message: Message): boolean {
+  if (message.role !== "tool" && message.role !== AGENT_STATUS_ROLE) return false;
+  if (!message.result || typeof message.result !== "object") return false;
+  const details = (message.result as Record<string, unknown>).details;
+  if (!details || typeof details !== "object") return false;
+  const args = message.args && typeof message.args === "object"
+    ? message.args as Record<string, unknown>
+    : {};
+  const roster = details as Record<string, unknown>;
+  return args.op === "jobs" &&
+    roster.op === "jobs" &&
+    // Any filter arg (`ids`, a future `status`, …) means a partial roster,
+    // not the complete one — only a bare `op`-only call qualifies.
+    Object.keys(args).every((key) => key === "op") &&
+    Array.isArray(roster.jobs) &&
+    roster.jobs.every((entry) => {
+      if (!entry || typeof entry !== "object") return false;
+      const row = entry as Record<string, unknown>;
+      return !!(argText(row.id) ?? argText(row.agentId) ?? argText(row.jobId)) && agentState(row.status) !== undefined;
+    });
+}
+
+/** Tool name head of a tool row's label ("task · Dispatching…" → "task").
+ *  The tag a row falls back to when the harness names no agent kind: the
+ *  `task` tool writes `agent` on some dispatches (scout batches) and omits it
+ *  on others (task batches), and a row with no tag at all says nothing about
+ *  where it came from.
+ *
+ *  `hub` is excluded: it is the coordination tool, not an agent kind, so a
+ *  wait-named agent whose dispatch cannot be resolved must render untagged
+ *  rather than claim a kind it never had.
+ */
+function toolHead(text: string): string | undefined {
+  const head = text.split("·")[0].trim().split(/[\s/\\]+/)[0];
+  if (!head || head.length > 24) return undefined;
+  return head.toLowerCase() === "hub" ? undefined : head;
+}
+
+/** Edit-class tool labels (write/edit/patch families) — the file
+ * modification surface. Mirrors the edit branch of ProcessDisclosure's
+ * toolTypeKey. */
+export function isEditToolLabel(text: string): boolean {
+  const head = text.split("·")[0].trim().toLowerCase();
+  const first = head.split(/[\s/\\]+/)[0].replace(/-/g, "_");
+  return [
+    "write",
+    "edit",
+    "write_file",
+    "edit_file",
+    "apply_patch",
+    "patch",
+    "notebook_edit",
+    "multiedit",
+    "multi_edit",
+  ].includes(first);
+}
+
+/** Index just past the last user message — the start of the current turn. */
+function currentTurnStart(messages: Message[]): number {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].role === "user") return i + 1;
+  }
+  return 0;
+}
+
+/** Per-message inputs of the fold. A message's args/result never change in
+ *  place (patches replace the row) and the fold re-runs on every stream
+ *  flush, so each row's JSON work is done once per row identity. */
+interface ToolRowFacts {
+  refs?: (SubagentRef | undefined)[];
+  waitIds?: string[];
+  argsKey?: string;
+  jobStates?: ReadonlyMap<string, AgentTaskStepState>;
+  roster?: boolean;
+  progress?: Map<SubagentRef, string>;
+}
+const toolRowFacts = new WeakMap<Message, ToolRowFacts>();
+function factsOf(message: Message): ToolRowFacts {
+  let facts = toolRowFacts.get(message);
+  if (!facts) {
+    facts = {};
+    toolRowFacts.set(message, facts);
+  }
+  return facts;
+}
+
+/** Whether two message arrays feed the summary folds identically. Assistant
+ *  and thinking text grows on every stream frame, while the folds read only
+ *  row kinds, tool payloads and hidden status rows — re-running them for a
+ *  text delta re-reads the whole session for no change. */
+export function sameSummaryHistory(a: Message[], b: Message[]): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < b.length; i++) {
+    if (a[i] === b[i]) continue;
+    const left = a[i];
+    const right = b[i];
+    if (left.seq !== right.seq || left.role !== right.role) return false;
+    // Only tool rows and hidden status rows carry fold inputs (args, result,
+    // todos, toolCallId). A growing answer or thinking row changes nothing.
+    if (right.role === "tool" || right.role === AGENT_STATUS_ROLE) return false;
+  }
+  return true;
+}
+
+/**
+ * Fold subagent tool rows across the session into panel steps.
+ * Steps in prior turns are settled/complete; current-turn steps stay active
+ * while streaming until tool result returns or subsequent assistant response arrives.
+ *
+ * A call is counted by the subagents it names, not by the call itself: one
+ * `task` can dispatch four agents ("Spawned 4 background agents") and one
+ * `hub` wait can cover them again, so a per-call count showed 2 where four
+ * were running. Ids name the subagent, so a later wait on them adds nothing.
+ */
+export function deriveAgentTaskSteps(
+  messages: Message[],
+  streaming: boolean,
+  engine: string,
+): AgentTaskStep[] {
+  const turnStart = currentTurnStart(messages);
+  const blockingSpawn = engine === "claude";
+
+  // Pass 1 — one state per allocated agent. Dispatch progress supplies the
+  // identity; later tool and hidden snapshots advance that identity's state.
+  // `observed` holds the ids a row explicitly reported a state for; the
+  // initial "spawned in this turn" fallback is an inference and must not
+  // outrank a later reply's completion inference.
+  const states = new Map<string, AgentTaskStepState>();
+  const observed = new Set<string>();
+  // Every `tasks[]` entry, by the name its dispatch asked for: the only place
+  // an agent's kind and assignment are stated.
+  const dispatched = new Map<string, SubagentRef>();
+  // Ids a `hub` call names on its own, gathered before any remap decision: a
+  // wait naming both "PluginReview" and "PluginReview-2" is two live agents
+  // (an original and its re-spawn), not one agent under two names.
+  const waitNamed = new Set<string>();
+  for (const message of messages) {
+    if (message.role !== "tool") continue;
+    const facts = factsOf(message);
+    for (const id of (facts.waitIds ??= waitIdsFromArgs(message.args))) waitNamed.add(id);
+  }
+  // Bind aliases to this dispatch entry, not its requested name: two calls
+  // can request the same name and receive different allocated agent ids.
+  const runtimeIds = new Map<SubagentRef, string>();
+  const runtimeDispatches = new Map<string, SubagentRef>();
+  const refsByMessage = new Map<Message, SubagentRef[]>();
+  const dispatchesByMessage = new Map<Message, (SubagentRef | undefined)[]>();
+  const dispatchesByCall = new Map<string, (SubagentRef | undefined)[] | null>();
+  // History rows carry no `toolCallId`; a hidden dispatch result re-read from
+  // the transcript binds by its own `tasks[]` arguments instead. Distinct
+  // dispatches pass different assignments, so only an exact argument match
+  // qualifies, and a repeated argument is ambiguous.
+  const dispatchArgs = new Map<string, number>();
+  const dispatchesByArgs = new Map<string, (SubagentRef | undefined)[] | null>();
+  const dispatchNames = new Set<string>();
+  const repeatedNames = new Set<string>();
+  for (const message of messages) {
+    if (message.role !== "tool") continue;
+    const facts = factsOf(message);
+    const refs = (facts.refs ??= dispatchRefsByIndex(message.args));
+    dispatchesByMessage.set(message, refs);
+    for (const ref of refs) {
+      if (!ref) continue;
+      if (dispatchNames.has(ref.id)) repeatedNames.add(ref.id);
+      dispatchNames.add(ref.id);
+    }
+    if (!refs.some((ref) => ref !== undefined)) continue;
+    const callId = argText(message.toolCallId);
+    if (callId) {
+      dispatchesByCall.set(callId, dispatchesByCall.has(callId) ? null : refs);
+      continue;
+    }
+    // A transcript re-read drops the call id from both the dispatch and its
+    // result, so only such rows may bind by arguments: a live hidden row that
+    // lost its id is a different call, even when the arguments coincide.
+    const args = (facts.argsKey ??= JSON.stringify(message.args ?? null));
+    dispatchArgs.set(args, (dispatchArgs.get(args) ?? 0) + 1);
+    dispatchesByArgs.set(args, refs);
+  }
+  // A fresh dispatch of a name after its recorded terminal state starts a new
+  // run; the previous generation's step must keep its own verdict.
+  const lastRestart = new Map<string, number>();
+  for (let i = 0; i < messages.length; i++) {
+    const message = messages[i];
+    // A dispatch that has not run yet, appearing after a recorded terminal
+    // state for the same name, is a new run: the previous completion says
+    // nothing about it. A fetched copy of an already-ended dispatch carries
+    // its result and must not reset the state it re-reads.
+    if (message.role === "tool" && message.result == null) {
+      for (const ref of dispatchesByMessage.get(message) ?? []) {
+        if (!ref || states.get(ref.id) !== "complete" || !observed.has(ref.id)) continue;
+        states.delete(ref.id);
+        observed.delete(ref.id);
+        lastRestart.set(ref.id, i);
+        const alias = runtimeIds.get(ref);
+        if (alias) lastRestart.set(alias, i);
+      }
+    }
+    const toolRow = message.role === "tool" || message.role === AGENT_STATUS_ROLE;
+    const facts = toolRow ? factsOf(message) : null;
+    const snapshot = facts
+      ? (facts.jobStates ??= jobStatesFromResult(message.result))
+      : jobStatesFromResult(message.result);
+    const roster = facts
+      ? (facts.roster ??= isCompleteJobsRoster(message))
+      : isCompleteJobsRoster(message);
+    if (roster) {
+      for (const [id, state] of states) {
+        if (state === "active" && !snapshot.has(id)) {
+          states.set(id, "complete");
+          observed.add(id);
+        }
+      }
+    }
+    for (const [id, state] of snapshot) {
+      states.set(id, state);
+      observed.add(id);
+    }
+    if (message.role === AGENT_STATUS_ROLE) {
+      // Refreshes can carry a tool result as a hidden row with a new seq.
+      // Bind it to its own dispatch by call id, or — for history rows that
+      // have none — by the dispatch arguments it carries.
+      const callId = argText(message.toolCallId);
+      const args = (factsOf(message).argsKey ??= JSON.stringify(message.args ?? null));
+      const refs = callId
+        ? dispatchesByCall.get(callId)
+        : dispatchArgs.get(args) === 1 ? dispatchesByArgs.get(args) : undefined;
+      if (refs) {
+        for (const [ref, id] of dispatchIdsFromProgress(refs, message.result)) {
+          runtimeIds.set(ref, id);
+          if (!runtimeDispatches.has(id)) runtimeDispatches.set(id, ref);
+        }
+      }
+    }
+    if (message.role !== "tool") continue;
+    const toolFacts = factsOf(message);
+    const dispatchRefs = dispatchesByMessage.get(message) ?? [];
+    const refs = dispatchRefs.filter((ref): ref is SubagentRef => ref !== undefined);
+    const waitIds = (toolFacts.waitIds ??= waitIdsFromArgs(message.args));
+    for (const [ref, id] of (toolFacts.progress ??= dispatchIdsFromProgress(dispatchRefs, message.result))) {
+      runtimeIds.set(ref, id);
+    }
+    for (const ref of refs) {
+      if (!dispatched.has(ref.id)) dispatched.set(ref.id, ref);
+      const id = runtimeIds.get(ref) ?? ref.id;
+      if (!runtimeDispatches.has(id)) runtimeDispatches.set(id, ref);
+    }
+    for (const id of waitIds) refs.push({ id });
+    refsByMessage.set(message, refs);
+    if (i >= turnStart) {
+      for (const ref of refs) {
+        const id = runtimeIds.get(ref) ?? ref.id;
+        if (!states.has(id)) states.set(id, "active");
+      }
+    }
+    // Old transcripts have no progress identity. Preserve their wait-based
+    // suffix inference, but never override an id confirmed by the dispatch.
+    for (const id of waitIds) {
+      if (dispatched.has(id) || runtimeDispatches.has(id)) continue;
+      const base = id.replace(/-\d+$/, "");
+      const source = dispatched.get(base);
+      if (base === id || !source || repeatedNames.has(base) || waitNamed.has(base) || runtimeIds.has(source)) continue;
+      runtimeIds.set(source, id);
+      runtimeDispatches.set(id, source);
+    }
+  }
+
+  // A runtime id allocated before the restart belongs to the previous run:
+  // carry the boundary over so its step still reads the old verdict.
+  for (const [ref, id] of runtimeIds) {
+    const at = lastRestart.get(ref.id);
+    if (at !== undefined) lastRestart.set(id, at);
+  }
+
+  // Pass 2 — display order: one step per agent, first naming wins.
+  const steps: AgentTaskStep[] = [];
+  const seen = new Set<string>();
+  // The settle checks only ever look forward. Index the next reply/boundary row
+  // once so a long session stays linear instead of O(tool rows × messages).
+  const nextSettleRow = new Int32Array(messages.length + 1).fill(-1);
+  const nextAssistantRow = new Int32Array(messages.length + 1).fill(-1);
+  let settleAt = -1;
+  let assistantAt = -1;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    nextSettleRow[i] = settleAt;
+    nextAssistantRow[i] = assistantAt;
+    const role = messages[i].role;
+    if (role === "assistant") assistantAt = i;
+    if (role === "assistant" || role === "thinking") settleAt = i;
+  }
+
+  for (let i = 0; i < messages.length; i++) {
+    const message = messages[i];
+    if (message.role !== "tool") continue;
+    // Naming ids is itself proof of delegation (`hub` waits carry a generic
+    // "hub ·…" label the name heuristic cannot classify).
+    const refs = refsByMessage.get(message) ?? [];
+    const declaresTaskList =
+      !!message.args &&
+      typeof message.args === "object" &&
+      Object.prototype.hasOwnProperty.call(message.args, "tasks");
+    if (refs.length === 0 && (declaresTaskList || !isSubagentToolLabel(message.text))) continue;
+
+    const isCurrentTurn = i >= turnStart;
+    let settled = !isCurrentTurn || !streaming;
+
+    if (!settled) {
+      if (message.result !== undefined && message.result !== null) {
+        settled = true;
+      } else {
+        settled = blockingSpawn ? i + 1 < messages.length : nextSettleRow[i] !== -1;
+      }
+    }
+    const hasLaterAssistant = nextAssistantRow[i] !== -1;
+    const settledTurn = !streaming && (!isCurrentTurn || hasLaterAssistant);
+
+    const info = extractSubagentTaskInfo(message);
+    const state = settled ? "complete" : "active";
+    if (refs.length === 0) {
+      steps.push({
+        key: String(message.seq),
+        label: info.label,
+        state: settledTurn ? "complete" : state,
+        subagentType: info.subagentType,
+        detail: info.detail,
+      });
+      continue;
+    }
+    for (const ref of refs) {
+      const runtimeId = runtimeIds.get(ref) ?? ref.id;
+      // A re-dispatch of the same name starts a second run: let its own step
+      // through, while the previous one keeps the verdict it ended with.
+      const restartAt = lastRestart.get(runtimeId) ?? lastRestart.get(ref.id);
+      if (restartAt === i) seen.delete(runtimeId);
+      if (seen.has(runtimeId)) continue;
+      seen.add(runtimeId);
+      const source = runtimeDispatches.get(runtimeId) ?? resolveDispatch(ref.id, dispatched);
+      const previousRun = restartAt !== undefined && i < restartAt;
+      const reportedState = previousRun
+        ? "complete"
+        : observed.has(runtimeId)
+          ? states.get(runtimeId)
+          // A dispatch with no later reply may still be running after its turn
+          // settles; only that fallback outranks the settle inference.
+          : !hasLaterAssistant && states.get(runtimeId) === "active" ? "active" : undefined;
+      const finalState = reportedState ?? state;
+      const pending = !previousRun && isCurrentTurn && !observed.has(runtimeId);
+      steps.push({
+        key: `${message.seq}:${runtimeId}`,
+        label: ref.label && ref.label !== ref.id ? ref.label : runtimeId,
+        state: finalState,
+        ...(pending ? { pending } : {}),
+        subagentType: ref.agent ?? source?.agent ?? info.subagentType ?? toolHead(message.text),
+        detail: ref.detail ?? source?.detail ?? info.detail,
+      });
+    }
+  }
+  return steps;
+}
+
+/**
+ * Unique files touched by edit-class tools across the whole loaded session,
+ * in first-edit order — the reference app's contract: the 已编辑 pill is
+ * session-scoped (survives turn boundaries and history reopen), not
+ * turn-scoped. Paths come from the tool start's path arg, so only edits
+ * with a real file target count.
+ */
+export function deriveEditedFiles(messages: Message[]): string[] {
+  const seen = new Set<string>();
+  const files: string[] = [];
+  for (let i = 0; i < messages.length; i++) {
+    const message = messages[i];
+    if (message.role !== "tool" || !message.path) continue;
+    if (!isEditToolLabel(message.text)) continue;
+    // Tool rows also record non-file targets (xd:// device endpoints, URLs)
+    // — real file paths never carry a URI scheme.
+    if (/^[a-z][a-z0-9+.-]*:\/\//i.test(message.path)) continue;
+    if (seen.has(message.path)) continue;
+    seen.add(message.path);
+    files.push(message.path);
+  }
+  return files;
+}
+
+/**
+ * Fold todo tool payloads across the whole loaded session into the current
+ * list. Two wire semantics: `replace` snapshots swap the list outright
+ * (TodoWrite-style full rewrites, init/clear ops); otherwise the payload is
+ * a patch matched by id or content (start/done/block/unblock), and "dropped"
+ * removes the item. Session-scoped like the edited-files pill.
+ */
+function parseTodoFromResult(result: unknown): TodosPayload | null {
+  if (!result) return null;
+  let parsed = result;
+  if (typeof result === "string") {
+    // Only the phases envelope is JSON text. Shell output and file bodies —
+    // the overwhelming majority of tool results — would otherwise pay a
+    // throwing JSON.parse (stack capture included) on every fold, which is
+    // what made a long session's status strip cost ~150ms per stream flush.
+    if (!result.includes('"phases"')) return null;
+    try {
+      parsed = JSON.parse(result);
+    } catch {
+      return null;
+    }
+  }
+  if (!parsed || typeof parsed !== "object") return null;
+  const record = parsed as Record<string, unknown>;
+  const details = record.details && typeof record.details === "object"
+    ? record.details as Record<string, unknown>
+    : record;
+  const phases = details.phases;
+  if (!Array.isArray(phases)) return null;
+  const items: TodoItem[] = [];
+  for (const phase of phases) {
+    if (!phase || typeof phase !== "object") continue;
+    const phaseName = typeof (phase as Record<string, unknown>).name === "string"
+      ? ((phase as Record<string, unknown>).name as string).trim()
+      : typeof (phase as Record<string, unknown>).phase === "string"
+        ? ((phase as Record<string, unknown>).phase as string).trim()
+        : undefined;
+    const tasks = (phase as Record<string, unknown>).tasks;
+    if (!Array.isArray(tasks)) continue;
+    for (const task of tasks) {
+      if (!task || typeof task !== "object") continue;
+      const t = task as Record<string, unknown>;
+      const content = typeof t.content === "string" ? t.content.trim() : "";
+      if (!content) continue;
+      const rawStatus = typeof t.status === "string" ? t.status.trim().toLowerCase() : "";
+      let status: TodoItem["status"] = "pending";
+      if (rawStatus === "completed" || rawStatus === "complete" || rawStatus === "done") {
+        status = "complete";
+      } else if (rawStatus === "in_progress" || rawStatus === "active" || rawStatus === "running") {
+        status = "active";
+      } else if (rawStatus === "blocked") {
+        status = "blocked";
+      } else if (rawStatus === "abandoned" || rawStatus === "dropped") {
+        status = "dropped";
+      }
+      const reason = typeof t.blocker === "string" ? t.blocker.trim() : typeof t.reason === "string" ? t.reason.trim() : undefined;
+      const detail = typeof t.detail === "string" ? t.detail.trim() : typeof t.description === "string" ? t.description.trim() : undefined;
+      items.push({
+        content,
+        status,
+        phase: phaseName || (typeof t.phase === "string" ? t.phase.trim() : undefined),
+        reason: reason || undefined,
+        detail: detail || undefined,
+      });
+    }
+  }
+  if (items.length === 0) return null;
+  return { items, replace: true };
+}
+
+/** A message's result never changes in place — the store replaces the row
+ *  when it patches — so the parse is cached per message identity. The fold
+ *  itself runs on every stream flush over the whole session. */
+const todoPayloadCache = new WeakMap<Message, TodosPayload | null>();
+function todoPayloadOf(message: Message): TodosPayload | null {
+  if (message.role !== "tool" && message.role !== AGENT_STATUS_ROLE) return null;
+  const cached = todoPayloadCache.get(message);
+  if (cached !== undefined) return cached;
+  const payload = parseTodoFromResult(message.result) ?? message.todos ?? null;
+  todoPayloadCache.set(message, payload);
+  return payload;
+}
+
+export function deriveTodoList(messages: Message[]): TodoItem[] {
+  let items: TodoItem[] = [];
+
+  // Map taskId -> original task subject for Claude Code TaskCreate/TaskUpdate tracking
+  const taskIdToContent = new Map<string, string>();
+  for (const message of messages) {
+    if (message.role === "tool") {
+      const toolName = message.text.toLowerCase();
+      if (toolName.includes("taskcreate") || toolName.includes("task_create")) {
+        const args = (message.args && typeof message.args === "object" ? message.args : {}) as Record<string, unknown>;
+        const subject = typeof args.subject === "string" ? args.subject.trim() : "";
+        if (subject && typeof message.result === "string") {
+          const match = message.result.match(/Task\s*#?(\w+)/i);
+          if (match) {
+            taskIdToContent.set(match[1], subject);
+          }
+        }
+      }
+    }
+  }
+
+  for (const message of messages) {
+    const payload = todoPayloadOf(message);
+    if (!payload) continue;
+    if (payload.replace) {
+      items = payload.items
+        .filter((item) => item.status !== "dropped")
+        .map((item) => ({ ...item, status: item.status ?? "pending" }));
+      continue;
+    }
+    for (const patch of payload.items) {
+      // Content is the fallback key for id-less items only: two tasks that
+      // share a subject but carry different ids are two tasks.
+      const mayBe = (item: TodoItem) => !patch.id || !item.id || item.id === patch.id;
+      let idx = -1;
+      if (patch.id) {
+        idx = items.findIndex((item) => item.id === patch.id);
+        if (idx < 0 && taskIdToContent.has(patch.id)) {
+          const mappedContent = taskIdToContent.get(patch.id);
+          idx = items.findIndex((item) => item.content === mappedContent && mayBe(item));
+        }
+      }
+      if (idx < 0 && patch.content) {
+        idx = items.findIndex((item) => item.content === patch.content && mayBe(item));
+      }
+
+      if (patch.status === "dropped") {
+        if (idx >= 0) items = items.filter((_, j) => j !== idx);
+        continue;
+      }
+      if (idx >= 0) {
+        const existing = items[idx];
+        items[idx] = {
+          ...existing,
+          ...patch,
+          status: patch.status ?? existing.status,
+          content: patch.content ? patch.content : existing.content,
+          phase: patch.phase ?? existing.phase,
+          reason: patch.reason ?? existing.reason,
+          detail: patch.detail ?? existing.detail,
+        };
+      } else if (patch.content) {
+        items = [...items, { ...patch, status: patch.status ?? "pending" }];
+      }
+    }
+  }
+  return items;
+}

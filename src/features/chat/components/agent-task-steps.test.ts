@@ -1,0 +1,823 @@
+import { describe, expect, it } from "vitest";
+import { AGENT_STATUS_ROLE, type Message } from "@/lib/ipc";
+import {
+  deriveAgentTaskSteps,
+  deriveTodoList,
+  agentState,
+  sameSummaryHistory,
+  subagentRefsFromArgs,
+} from "./agent-task-steps";
+
+function tool(seq: number, text: string, args?: unknown, result?: unknown): Message {
+  return { seq, role: "tool", text, ts: null, args, result } as Message;
+}
+
+/** The shapes omp actually writes into the session transcript. */
+const DISPATCH = tool(2, "task · Dispatching parallel agents", {
+  context: "# Goal ...",
+  tasks: [
+    { agent: "task", name: "CoreInvokeFilterParse", task: "# Target\n只改一个文件…" },
+    { agent: "task", name: "IdolLiveDemosaic", task: "# Target\nIdolLive 复验…" },
+    { agent: "task", name: "IdolLiveTranslate", task: "# Target\n翻译复验…" },
+  ],
+});
+const WAIT = tool(3, "hub · Waiting for the four concurrent subagents", { i: "…", op: "wait", timeoutMs: 600000 });
+const WAIT_BY_ID = tool(4, "hub · Waiting for CoreInvokeFilterParse", { i: "…", ids: ["CoreInvokeFilterParse"], op: "wait" });
+/** A wait that also covers a background job id the dispatch did not name. */
+const WAIT_EXTRA = tool(5, "hub · Waiting on the queue", { i: "…", ids: ["bg_4"], op: "wait" });
+
+describe("engine status words", () => {
+  /** `jobs[].status` comes verbatim from the engine. A terminal word this
+   *  table misses leaves the strip running until the retry budget expires,
+   *  which is the bug the hidden-delivery fold exists to fix. */
+  it("settles every terminal word an engine reports", () => {
+    const terminal = [
+      "completed", "complete", "succeeded", "success", "done", "finished",
+      "failed", "error", "errored", "aborted", "cancelled", "canceled",
+      "killed", "timed_out", "timeout", "stopped", "idle", "parked",
+    ];
+    for (const word of terminal) expect(agentState(word)).toBe("complete");
+  });
+
+  it("treats only progress words as running and leaves the rest unknown", () => {
+    for (const word of ["running", "pending", "queued", "active", "in_progress", " RUNNING "]) {
+      expect(agentState(word)).toBe("active");
+    }
+    // Unknown words must stay unsettled instead of guessing a terminal state.
+    expect(agentState("mystery")).toBeUndefined();
+    expect(agentState(undefined)).toBeUndefined();
+  });
+});
+
+describe("subagent counting", () => {
+  it("counts the agents a call names, not the call", () => {
+    const steps = deriveAgentTaskSteps([DISPATCH], true, "omp");
+    expect(steps.map((s) => s.label)).toEqual([
+      "CoreInvokeFilterParse",
+      "IdolLiveDemosaic",
+      "IdolLiveTranslate",
+    ]);
+    expect(steps.every((s) => s.state === "active")).toBe(true);
+  });
+
+  it("does not promote background jobs to subagents", () => {
+    const steps = deriveAgentTaskSteps([DISPATCH, WAIT_EXTRA], true, "omp");
+    expect(steps.map((s) => s.key)).toEqual([
+      "2:CoreInvokeFilterParse",
+      "2:IdolLiveDemosaic",
+      "2:IdolLiveTranslate",
+    ]);
+  });
+
+  it("does not double count a wait on ids a dispatch already named", () => {
+    const steps = deriveAgentTaskSteps([DISPATCH, WAIT_BY_ID], true, "omp");
+    expect(steps).toHaveLength(3);
+
+    // 父 assistant 暂停流式（streaming=false）不该把刚派出去的 subagent
+    // 标 complete；只有显式 hub roster / jobs snapshot 才会推动状态。
+    const settled = deriveAgentTaskSteps([DISPATCH, WAIT_BY_ID], false, "omp");
+    expect(settled.every((s) => s.state === "active")).toBe(true);
+  });
+
+  it("ignores a call that names no subagent", () => {
+    // Roster checks (`hub jobs`) and prose-only waits must not inflate the
+    // count — they say nothing about how many agents are out there.
+    expect(deriveAgentTaskSteps([WAIT], true, "omp")).toHaveLength(0);
+    expect(deriveAgentTaskSteps([tool(2, "hub · Checking background job roster", { op: "jobs" })], true, "omp")).toHaveLength(0);
+  });
+
+  it("keeps agents named by a running hub snapshot active even when the host is not streaming", () => {
+    const snapshot = tool(6, "hub · Waiting for workers", { op: "wait" }, {
+      details: {
+        op: "wait",
+        jobs: [
+          { id: "CoreInvokeFilterParse", type: "task", status: "running" },
+          { id: "IdolLiveTranslate", type: "task", status: "running" },
+        ],
+      },
+    });
+    const steps = deriveAgentTaskSteps([DISPATCH, snapshot], false, "omp");
+    expect(steps.map(({ label, state }) => ({ label, state }))).toEqual([
+      { label: "CoreInvokeFilterParse", state: "active" },
+      // IdolLiveDemosaic was dispatched but not mentioned in the running hub
+      // snapshot. Settling the parent turn must NOT force it to "complete" —
+      // the agent is still in flight and only an explicit hub status (or a
+      // complete jobs roster) should settle it.
+      { label: "IdolLiveDemosaic", state: "active" },
+      { label: "IdolLiveTranslate", state: "active" },
+    ]);
+  });
+
+  it.each(["jobs", "peers", "progress"])("applies hidden %s deliveries using jobId without creating agent steps", (bucket) => {
+    const delivery: Message = {
+      seq: 6,
+      role: AGENT_STATUS_ROLE,
+      text: "task · Worker completed",
+      ts: null,
+      args: { tasks: [{ name: "NotDispatched" }], ids: ["NotWaited"] },
+      result: {
+        details: { [bucket]: [{ jobId: " CoreInvokeFilterParse ", status: "completed" }] },
+      },
+    };
+
+    expect(deriveAgentTaskSteps([DISPATCH, delivery], false, "omp").map(({ label, state }) => ({ label, state }))).toEqual([
+      { label: "CoreInvokeFilterParse", state: "complete" },
+      { label: "IdolLiveDemosaic", state: "active" },
+      { label: "IdolLiveTranslate", state: "active" },
+    ]);
+    expect(deriveAgentTaskSteps([delivery], false, "omp")).toEqual([]);
+  });
+
+  it("resolves a suffixed job handle through the explicit agent identity", () => {
+    const delivery: Message = {
+      seq: 6,
+      role: AGENT_STATUS_ROLE,
+      text: "",
+      ts: null,
+      result: {
+        details: {
+          jobs: [
+            // omp may suffix the background handle on collision; `agentId` is
+            // the name the dispatch used.
+            { jobId: "CoreInvokeFilterParse-2", agentId: "CoreInvokeFilterParse", status: "completed" },
+          ],
+        },
+      },
+    };
+
+    expect(deriveAgentTaskSteps([DISPATCH, delivery], true, "omp").map((step) => step.state)).toEqual([
+      "complete",
+      "active",
+      "active",
+    ]);
+  });
+
+  it("prefers an explicit snapshot id and falls back to jobId for a blank id", () => {
+    const delivery: Message = {
+      seq: 6,
+      role: AGENT_STATUS_ROLE,
+      text: "",
+      ts: null,
+      result: {
+        details: {
+          jobs: [
+            { id: " ", jobId: "CoreInvokeFilterParse", status: "completed" },
+            { id: "IdolLiveDemosaic", jobId: "IdolLiveTranslate", status: "completed" },
+          ],
+        },
+      },
+    };
+
+    expect(deriveAgentTaskSteps([DISPATCH, delivery], true, "omp").map((step) => step.state)).toEqual([
+      "complete",
+      "complete",
+      "active",
+    ]);
+  });
+
+  it("does not treat hidden jobs deliveries as complete rosters", () => {
+    const delivery: Message = {
+      seq: 6,
+      role: AGENT_STATUS_ROLE,
+      text: "",
+      ts: null,
+      result: { details: { op: "jobs", jobs: [] } },
+    };
+
+    expect(deriveAgentTaskSteps([DISPATCH, delivery], false, "omp").map((step) => step.state)).toEqual([
+      "active",
+      "active",
+      "active",
+    ]);
+  });
+
+  it("applies tool and hidden status snapshots in transcript order", () => {
+    const completed = tool(6, "hub", { op: "wait" }, {
+      details: { jobs: [{ id: "CoreInvokeFilterParse", status: "completed" }] },
+    });
+    const running: Message = {
+      seq: 7,
+      role: AGENT_STATUS_ROLE,
+      text: "",
+      ts: null,
+      result: { details: { progress: [{ jobId: "CoreInvokeFilterParse", status: "running" }] } },
+    };
+
+    expect(deriveAgentTaskSteps([DISPATCH, completed, running], false, "omp")[0].state).toBe("active");
+    expect(deriveAgentTaskSteps([DISPATCH, running, completed], false, "omp")[0].state).toBe("complete");
+  });
+
+  it("accepts jobId entries in a real complete jobs roster", () => {
+    const roster = tool(6, "hub", { op: "jobs" }, {
+      details: { op: "jobs", jobs: [{ jobId: "CoreInvokeFilterParse", status: "running" }] },
+    });
+
+    expect(deriveAgentTaskSteps([DISPATCH, roster], false, "omp").map((step) => step.state)).toEqual([
+      "active",
+      "complete",
+      "complete",
+    ]);
+  });
+
+  it("retains the complete delegated task as its clickable detail", () => {
+    const dispatch = tool(2, "task · Dispatching worker", {
+      tasks: [{
+        agent: "task",
+        name: "Worker",
+        task: "# Target\nOwn relay.rs only.\n# Acceptance\nOutages recover without toggling.",
+      }],
+    });
+    expect(deriveAgentTaskSteps([dispatch], true, "omp")[0].detail).toBe(
+      "# Target\nOwn relay.rs only.\n# Acceptance\nOutages recover without toggling.",
+    );
+  });
+
+  it("tags every row: the agent kind when the harness names one, else the tool", () => {
+    // The harness writes `agent` only for some dispatches (scout batches carry
+    // it, task batches do not); a row without a tag loses the only hint of
+    // where it came from.
+    const kindless = tool(2, "task · Dispatching workers", {
+      tasks: [{ name: "RelayWorker", task: "# Target\nOwn relay.rs." }],
+    });
+    const kinded = tool(3, "task · Dispatching scouts", {
+      tasks: [{ agent: "scout", name: "RepoMap", task: "# Target\nMap the repo." }],
+    });
+    expect(deriveAgentTaskSteps([kindless, kinded], true, "omp").map((s) => s.subagentType)).toEqual([
+      "task",
+      "scout",
+    ]);
+  });
+
+  it("normalizes stringified task arrays before later hub references", () => {
+    const encodedDispatch = tool(2, "task · Marking dual-arch regression done", {
+      tasks: JSON.stringify([
+        { name: "IdolLiveBackstage", task: "# Target\nVerify IdolLive." },
+        { name: "AfterstoryCgScene", task: "# Target\nVerify Afterstory." },
+      ]),
+    });
+    const wait = tool(3, "hub · Waiting for live demosaic subagents", {
+      ids: ["IdolLiveBackstage", "AfterstoryCgScene"],
+      op: "wait",
+    });
+
+    expect(
+      deriveAgentTaskSteps([encodedDispatch, wait], true, "omp").map(
+        ({ label, subagentType }) => ({ label, subagentType }),
+      ),
+    ).toEqual([
+      { label: "IdolLiveBackstage", subagentType: "task" },
+      { label: "AfterstoryCgScene", subagentType: "task" },
+    ]);
+  });
+
+  it("ignores malformed task arrays instead of rendering the dispatch as an agent", () => {
+    const malformed = tool(2, "task · Dispatching demosaic evidence tasks", {
+      tasks: '[{"name":"IdolLiveSceneDemosaic","task":"unterminated}]',
+    });
+    const retry = tool(3, "task · Dispatching demosaic evidence tasks", {
+      tasks: [
+        { name: "IdolLiveSceneDemosaic", task: "# Target\nVerify IdolLive." },
+        { name: "AfterstoryMosaicScene", task: "# Target\nVerify Afterstory." },
+      ],
+    });
+
+    expect(
+      deriveAgentTaskSteps([malformed, retry], true, "omp").map(
+        ({ label, subagentType }) => ({ label, subagentType }),
+      ),
+    ).toEqual([
+      { label: "IdolLiveSceneDemosaic", subagentType: "task" },
+      { label: "AfterstoryMosaicScene", subagentType: "task" },
+    ]);
+  });
+
+  it("keeps pending and queued dispatch progress active", () => {
+    const dispatch = tool(2, "task · Dispatching workers", {
+      tasks: [
+        { name: "PendingWorker", task: "# Target\nWait for a worker slot." },
+        { name: "QueuedWorker", task: "# Target\nWait behind PendingWorker." },
+      ],
+    }, {
+      details: {
+        progress: [
+          { id: "PendingWorker", status: "pending" },
+          { id: "QueuedWorker", status: "queued" },
+        ],
+      },
+    });
+
+    expect(deriveAgentTaskSteps([dispatch], false, "omp").map((step) => step.state)).toEqual([
+      "active",
+      "active",
+    ]);
+  });
+
+  it.each(["completed", "failed", "cancelled", "aborted"])(
+    "settles a renamed dispatch from a hidden %s delivery without a hub wait",
+    (status) => {
+      const dispatch = tool(2, "task · Dispatching worker", {
+        tasks: [{
+          name: "Worker",
+          description: "Review the relay",
+          agent: "reviewer",
+          task: "# Target\nReview relay.rs.",
+        }],
+      }, {
+        details: { progress: [{ id: "Worker-2", index: 0, status: "running" }] },
+      });
+      const delivery: Message = {
+        seq: 3,
+        role: AGENT_STATUS_ROLE,
+        text: "",
+        ts: null,
+        result: { details: { jobs: [{ id: "Worker-2", status }] } },
+      };
+
+      expect(deriveAgentTaskSteps([dispatch], false, "omp")).toEqual([{
+        key: "2:Worker-2",
+        label: "Review the relay",
+        state: "active",
+        subagentType: "reviewer",
+        detail: "# Target\nReview relay.rs.",
+      }]);
+      expect(deriveAgentTaskSteps([dispatch, delivery], false, "omp")).toEqual([{
+        key: "2:Worker-2",
+        label: "Review the relay",
+        state: "complete",
+        subagentType: "reviewer",
+        detail: "# Target\nReview relay.rs.",
+      }]);
+    },
+  );
+
+  it("accepts an unindexed singleton dispatch progress id", () => {
+    const dispatch = tool(2, "task", { tasks: [{ name: "Worker" }] }, {
+      details: { progress: [{ id: "Worker-2", status: "running" }] },
+    });
+    const delivery: Message = {
+      seq: 3, role: AGENT_STATUS_ROLE, text: "", ts: null,
+      result: { details: { jobs: [{ id: "Worker-2", status: "completed" }] } },
+    };
+
+    expect(deriveAgentTaskSteps([dispatch, delivery], false, "omp").map(({ label, state }) => ({ label, state }))).toEqual([
+      { label: "Worker-2", state: "complete" },
+    ]);
+  });
+
+  it("keeps the original and renamed agent distinct across dispatches and turns", () => {
+    const original = tool(2, "task", {
+      tasks: [{ name: "Worker", agent: "scout", task: "Map the repository." }],
+    }, { details: { progress: [{ id: "Worker", index: 0, status: "running" }] } });
+    const nextTurn: Message = { seq: 3, role: "user", text: "Review it too.", ts: null };
+    const renamed = tool(4, "task", {
+      tasks: [{ name: "Worker", agent: "reviewer", task: "Review the relay." }],
+    }, { details: { progress: [{ id: "Worker-2", index: 0, status: "running" }] } });
+    const delivery: Message = {
+      seq: 5, role: AGENT_STATUS_ROLE, text: "", ts: null,
+      result: { details: { jobs: [{ id: "Worker-2", status: "completed" }] } },
+    };
+
+    expect(deriveAgentTaskSteps([original, nextTurn, renamed], false, "omp").map(({ label, state }) => ({ label, state }))).toEqual([
+      { label: "Worker", state: "active" },
+      { label: "Worker-2", state: "active" },
+    ]);
+    expect(deriveAgentTaskSteps([original, nextTurn, renamed, delivery], false, "omp").map(
+      ({ label, state, subagentType, detail }) => ({ label, state, subagentType, detail }),
+    )).toEqual([
+      { label: "Worker", state: "active", subagentType: "scout", detail: "Map the repository." },
+      { label: "Worker-2", state: "complete", subagentType: "reviewer", detail: "Review the relay." },
+    ]);
+  });
+
+  it("maps reordered progress by task index without mixing duplicate or hierarchical names", () => {
+    const dispatch = tool(2, "task", {
+      tasks: JSON.stringify([
+        { name: "Root.Worker", agent: "scout", task: "Map sources." },
+        { name: "Root.Worker", agent: "reviewer", task: "Review sources." },
+        { name: "Root.Worker-2", agent: "task", task: "Fix sources." },
+      ]),
+    }, {
+      details: { progress: [
+        { id: "Root.Worker-2-2", index: 2, status: "running" },
+        { id: "Root.Worker-2", index: 1, status: "running" },
+        { id: "Root.Worker", index: 0, status: "running" },
+      ] },
+    });
+    const delivery: Message = {
+      seq: 3, role: AGENT_STATUS_ROLE, text: "", ts: null,
+      result: { details: { jobs: [
+        { id: "Root.Worker-2", status: "failed" },
+        { id: "Root.Worker-2-2", status: "cancelled" },
+      ] } },
+    };
+
+    expect(deriveAgentTaskSteps([dispatch, delivery], false, "omp").map(
+      ({ label, state, subagentType, detail }) => ({ label, state, subagentType, detail }),
+    )).toEqual([
+      { label: "Root.Worker", state: "active", subagentType: "scout", detail: "Map sources." },
+      { label: "Root.Worker-2", state: "complete", subagentType: "reviewer", detail: "Review sources." },
+      { label: "Root.Worker-2-2", state: "complete", subagentType: "task", detail: "Fix sources." },
+    ]);
+  });
+
+  it("preserves original task indexes in a partial progress snapshot", () => {
+    const dispatch = tool(2, "task", { tasks: [
+      { name: "First", agent: "scout", task: "Map sources." },
+      null,
+      { name: "Second", agent: "reviewer", task: "Review sources." },
+    ] }, {
+      details: { progress: [{ id: "Second-2", index: 2, status: "running" }] },
+    });
+    const delivery: Message = {
+      seq: 3, role: AGENT_STATUS_ROLE, text: "", ts: null,
+      result: { details: { jobs: [{ id: "Second-2", status: "completed" }] } },
+    };
+
+    expect(deriveAgentTaskSteps([dispatch, delivery], false, "omp").map(
+      ({ label, state, subagentType, detail }) => ({ label, state, subagentType, detail }),
+    )).toEqual([
+      { label: "First", state: "active", subagentType: "scout", detail: "Map sources." },
+      { label: "Second-2", state: "complete", subagentType: "reviewer", detail: "Review sources." },
+    ]);
+  });
+
+  it.each([
+    [{ id: "First-2", status: "running" }, { id: "Second-2", status: "running" }],
+    [{ id: "First-2", index: 0, status: "running" }, { id: "Second-2", index: 0, status: "running" }],
+    [{ id: "Shared", index: 0, status: "running" }, { id: "Shared", index: 1, status: "running" }],
+    [{ id: "First-2", index: -1, status: "running" }, { id: "Second-2", index: 2, status: "running" }],
+    [{ jobId: "First-2", index: 0, status: "running" }, { jobId: "Second-2", index: 1, status: "running" }],
+  ])("does not guess a dispatch identity from ambiguous progress %#", (...progress) => {
+    const dispatch = tool(2, "task", { tasks: [{ name: "First" }, { name: "Second" }] }, { details: { progress } });
+    const delivery: Message = {
+      seq: 3, role: AGENT_STATUS_ROLE, text: "", ts: null,
+      result: { details: { jobs: [
+        { id: "First-2", status: "completed" },
+        { id: "Second-2", status: "completed" },
+        { id: "Shared", status: "completed" },
+      ] } },
+    };
+
+    expect(deriveAgentTaskSteps([dispatch, delivery], false, "omp").map(({ label, state }) => ({ label, state }))).toEqual([
+      { label: "First", state: "active" },
+      { label: "Second", state: "active" },
+    ]);
+  });
+
+  it("hydrates a cached dispatch identity from a hidden result with the same toolCallId", () => {
+    const dispatch: Message = {
+      ...tool(2, "task", { tasks: [{ name: "Worker", agent: "reviewer", task: "Review relay.rs." }] }),
+      toolCallId: "spawn-worker",
+    };
+    const progress: Message = {
+      ...dispatch, seq: 20, role: AGENT_STATUS_ROLE, text: "",
+      result: { details: { progress: [{ id: "Worker-2", index: 0, status: "running" }] } },
+    };
+    const delivery: Message = {
+      seq: 21, role: AGENT_STATUS_ROLE, text: "", ts: null,
+      result: { details: { jobs: [{ id: "Worker-2", status: "completed" }] } },
+    };
+
+    expect(deriveAgentTaskSteps([dispatch, progress], false, "omp").map(({ label, state }) => ({ label, state }))).toEqual([
+      { label: "Worker-2", state: "active" },
+    ]);
+    expect(deriveAgentTaskSteps([dispatch, progress, delivery], false, "omp")).toEqual([{
+      key: "2:Worker-2",
+      label: "Worker-2",
+      state: "complete",
+      subagentType: "reviewer",
+      detail: "Review relay.rs.",
+    }]);
+  });
+
+  it.each([undefined, "other-spawn"])(
+    "does not map an unrelated hidden dispatch by matching task names (%s)",
+    (toolCallId) => {
+      const dispatch: Message = {
+        ...tool(2, "task", { tasks: [{ name: "Worker" }] }),
+        toolCallId: "spawn-worker",
+      };
+      const delivery: Message = {
+        ...dispatch, seq: 20, role: AGENT_STATUS_ROLE, text: "", toolCallId,
+        result: { details: { progress: [{ id: "Worker-2", index: 0, status: "completed" }] } },
+      };
+
+      expect(deriveAgentTaskSteps([dispatch, delivery], false, "omp").map(({ label, state }) => ({ label, state }))).toEqual([
+        { label: "Worker", state: "active" },
+      ]);
+      expect(deriveAgentTaskSteps([delivery], false, "omp")).toEqual([]);
+    },
+  );
+
+  it("binds a hidden dispatch result to its own call when another dispatch requested the same name", () => {
+    const original: Message = {
+      ...tool(2, "task", { tasks: [{ name: "Worker", agent: "scout", task: "Map sources." }] }),
+      toolCallId: "map-worker",
+    };
+    const renamed: Message = {
+      ...tool(3, "task", { tasks: [{ name: "Worker", agent: "reviewer", task: "Review sources." }] }),
+      toolCallId: "review-worker",
+    };
+    const delivery: Message = {
+      ...renamed, seq: 20, role: AGENT_STATUS_ROLE, text: "",
+      result: { details: { progress: [{ id: "Worker-2", index: 0, status: "completed" }] } },
+    };
+
+    expect(deriveAgentTaskSteps([original, renamed, delivery], false, "omp").map(
+      ({ label, state, subagentType, detail }) => ({ label, state, subagentType, detail }),
+    )).toEqual([
+      { label: "Worker", state: "active", subagentType: "scout", detail: "Map sources." },
+      { label: "Worker-2", state: "complete", subagentType: "reviewer", detail: "Review sources." },
+    ]);
+  });
+
+  it("does not merge separately waited ids after a dispatch confirms its allocated name", () => {
+    const dispatch = tool(2, "task", { tasks: [{ name: "Worker", agent: "reviewer", task: "Review sources." }] }, {
+      details: { progress: [{ id: "Worker-2", index: 0, status: "running" }] },
+    });
+    const wait = tool(3, "hub", { ids: JSON.stringify(["Worker", "Worker-2"]), op: "wait" });
+    const delivery: Message = {
+      seq: 4, role: AGENT_STATUS_ROLE, text: "", ts: null,
+      result: { details: { jobs: [{ id: "Worker-2", status: "completed" }] } },
+    };
+
+    expect(deriveAgentTaskSteps([dispatch, wait, delivery], false, "omp").map(({ label, state }) => ({ label, state }))).toEqual([
+      { label: "Worker-2", state: "complete" },
+      { label: "Worker", state: "active" },
+    ]);
+  });
+
+  it("settles running agents omitted by a later complete jobs roster", () => {
+    const running = tool(3, "hub · Waiting for workers", { op: "wait" }, {
+      details: {
+        op: "wait",
+        jobs: [{ id: "CoreInvokeFilterParse", status: "running" }],
+      },
+    });
+    const emptyRoster = tool(4, "hub · Checking background jobs", { op: "jobs" }, {
+      details: { op: "jobs", jobs: [] },
+    });
+
+    const steps = deriveAgentTaskSteps([DISPATCH, running, emptyRoster], false, "omp");
+    expect(steps.every((step) => step.state === "complete")).toBe(true);
+  });
+
+  it("does not settle agents from malformed or unknown roster entries", () => {
+    const running = tool(3, "hub", { op: "wait" }, {
+      details: { jobs: [{ id: "CoreInvokeFilterParse", status: "running" }] },
+    });
+    const malformed = tool(4, "hub", { op: "jobs" }, {
+      details: { op: "jobs", jobs: null },
+    });
+    const unknown = tool(5, "hub", { op: "jobs" }, {
+      details: { op: "jobs", jobs: [{ id: "CoreInvokeFilterParse", status: "unknown" }] },
+    });
+    expect(deriveAgentTaskSteps([DISPATCH, running, malformed], false, "omp")[0].state).toBe("active");
+    expect(deriveAgentTaskSteps([DISPATCH, running, unknown], false, "omp")[0].state).toBe("active");
+  });
+
+  it("does not settle agents from a filtered (partial) jobs roster", () => {
+    const running = tool(3, "hub", { op: "wait" }, {
+      details: { jobs: [{ id: "CoreInvokeFilterParse", status: "running" }] },
+    });
+    const filtered = tool(4, "hub", { op: "jobs", status: "running" }, {
+      details: { op: "jobs", jobs: [] },
+    });
+    expect(deriveAgentTaskSteps([DISPATCH, running, filtered], false, "omp")[0].state).toBe("active");
+  });
+
+  it("does not mark dispatched subagents complete just because the parent stops streaming", () => {
+    // 回归用例：父 assistant 派完 subagent 后停一拍等工具结果（streaming
+    // 变 false），不该让刚派出去的 agent 瞬间变 complete。RunStatusStrip
+    // 之前会因此把所有子代理渲染成"已完成"，但 hub roster 此时还没回来。
+    const dispatch = tool(2, "task · Dispatching workers", {
+      tasks: [
+        { agent: "task", name: "WorkerA", task: "# Target\nOwn relay.rs." },
+        { agent: "task", name: "WorkerB", task: "# Target\nOwn web relay." },
+      ],
+    });
+    const stoppedStreaming = deriveAgentTaskSteps([dispatch], false, "omp");
+    expect(stoppedStreaming.every((s) => s.state === "active")).toBe(true);
+
+    // 后续 hub jobs snapshot 显式推进到 running → 仍 active
+    const runningSnapshot = tool(3, "hub · Waiting for workers", { op: "wait" }, {
+      details: {
+        op: "wait",
+        jobs: [
+          { id: "WorkerA", type: "task", status: "running" },
+          { id: "WorkerB", type: "task", status: "running" },
+        ],
+      },
+    });
+    const withSnapshot = deriveAgentTaskSteps([dispatch, runningSnapshot], false, "omp");
+    expect(withSnapshot.every((s) => s.state === "active")).toBe(true);
+
+    // hub jobs snapshot 显式报 complete → 才标 complete
+    const doneSnapshot = tool(3, "hub · Waiting for workers", { op: "wait" }, {
+      details: {
+        op: "wait",
+        jobs: [
+          { id: "WorkerA", type: "task", status: "complete" },
+          { id: "WorkerB", type: "task", status: "complete" },
+        ],
+      },
+    });
+    const allDone = deriveAgentTaskSteps([dispatch, doneSnapshot], false, "omp");
+    expect(allDone.every((s) => s.state === "complete")).toBe(true);
+  });
+
+  it("reads named agents but ignores background-job ids", () => {
+    expect(subagentRefsFromArgs({ ids: ["bg_1", "bg_2"] })).toEqual([]);
+    expect(subagentRefsFromArgs({ ids: ["CoreInvokeFilterParse"] })).toEqual([
+      { id: "CoreInvokeFilterParse" },
+    ]);
+    expect(subagentRefsFromArgs({ tasks: [{ id: "alpha" }] })[0]).toMatchObject({ id: "alpha", label: "alpha" });
+    expect(subagentRefsFromArgs({ op: "jobs" })).toEqual([]);
+  });
+
+  it("resolves a re-spawn's suffixed id back to the dispatch that named it", () => {
+    // The reported bug: two review agents, one shown as `reviewer` with its
+    // assignment and the other as a bare `hub` with no detail, because the
+    // runtime reported it back under a disambiguated id the dispatch's
+    // `tasks[]` never spelled out.
+    const dispatch = tool(2, "task · Dispatching reviewers", {
+      tasks: [
+        { agent: "reviewer", name: "HostLifecycleReview", task: "# Target\nReview host lifecycle." },
+        { agent: "reviewer", name: "PluginReview", task: "# Target\nReview the plugin surface." },
+      ],
+    });
+    const wait = tool(3, "hub · Waiting for the reviewers", {
+      ids: ["HostLifecycleReview", "PluginReview-2"],
+      op: "wait",
+    });
+
+    expect(
+      deriveAgentTaskSteps([dispatch, wait], true, "omp").map(
+        ({ label, subagentType, detail }) => ({ label, subagentType, detail }),
+      ),
+    ).toEqual([
+      {
+        label: "HostLifecycleReview",
+        subagentType: "reviewer",
+        detail: "# Target\nReview host lifecycle.",
+      },
+      // The row keeps the id the runtime reported, and inherits nothing but
+      // the kind and the assignment.
+      {
+        label: "PluginReview-2",
+        subagentType: "reviewer",
+        detail: "# Target\nReview the plugin surface.",
+      },
+    ]);
+  });
+
+  it("keeps a base name and its suffixed sibling apart when both are live", () => {
+    // A suffix only means "same agent, re-spawned" when the base name is gone.
+    // Here the wait names both, so two agents really are out there: they stay
+    // two rows, and the re-spawn still inherits the kind and assignment of the
+    // dispatch its name derives from.
+    const dispatch = tool(2, "task · Dispatching a reviewer", {
+      tasks: [{ agent: "reviewer", name: "PluginReview", task: "# Target\nReview the plugin surface." }],
+    });
+    const wait = tool(3, "hub · Waiting for the reviewers", {
+      ids: ["PluginReview", "PluginReview-2"],
+      op: "wait",
+    });
+
+    expect(
+      deriveAgentTaskSteps([dispatch, wait], true, "omp").map(
+        ({ label, subagentType, detail }) => ({ label, subagentType, detail }),
+      ),
+    ).toEqual([
+      {
+        label: "PluginReview",
+        subagentType: "reviewer",
+        detail: "# Target\nReview the plugin surface.",
+      },
+      {
+        label: "PluginReview-2",
+        subagentType: "reviewer",
+        detail: "# Target\nReview the plugin surface.",
+      },
+    ]);
+  });
+
+  it("does not let unrelated names inherit each other's assignment", () => {
+    // Only a trailing `-<digits>` is a disambiguation suffix. Anything looser
+    // would hand one agent's kind and task text to a different agent.
+    const dispatch = tool(2, "task · Dispatching a reviewer", {
+      tasks: [{ agent: "reviewer", name: "PluginReview", task: "# Target\nReview the plugin surface." }],
+    });
+    const wait = tool(3, "hub · Waiting for the worker", { ids: ["PluginReviewWorker"], op: "wait" });
+
+    const steps = deriveAgentTaskSteps([dispatch, wait], true, "omp");
+    expect(steps.map((s) => s.label)).toEqual(["PluginReview", "PluginReviewWorker"]);
+    expect(steps[1].subagentType).toBeUndefined();
+    expect(steps[1].detail).toBeUndefined();
+  });
+
+  it("leaves a row untagged rather than tagging it with the coordination tool", () => {
+    // `hub` is how the host waits on agents, never a kind of agent, so an id
+    // no dispatch ever named gets no tag at all.
+    const wait = tool(2, "hub · Waiting for a stray worker", { ids: ["StrayWorker"], op: "wait" });
+    const steps = deriveAgentTaskSteps([wait], true, "omp");
+    expect(steps.map(({ label, subagentType }) => ({ label, subagentType }))).toEqual([
+      { label: "StrayWorker", subagentType: undefined },
+    ]);
+  });
+
+  it("folds authoritative todo snapshot from message.result details.phases", () => {
+    const messages: Message[] = [
+      tool(1, "todo", { op: "init" }, undefined),
+      tool(2, "todo", { op: "done", phase: "verify" }, {
+        details: {
+          phases: [
+            {
+              name: "impl",
+              tasks: [
+                { content: "实现功能", status: "completed" },
+              ],
+            },
+          ],
+        },
+      }),
+    ];
+    const items = deriveTodoList(messages);
+    expect(items).toEqual([{ content: "实现功能", status: "complete", phase: "impl", reason: undefined, detail: undefined }]);
+  });
+});
+
+describe("deriveTodoList id-keyed patches", () => {
+  const todoRow = (seq: number, text: string, todos: unknown): Message =>
+    ({ seq, role: "tool", text, ts: null, todos } as Message);
+  const patch = (items: unknown[]) => ({ replace: false, items });
+
+  it("keeps the status when a patch does not carry one (a rename)", () => {
+    const items = deriveTodoList([
+      todoRow(1, "TaskCreate", patch([{ id: "12", content: "旧标题", status: "pending" }])),
+      todoRow(2, "TaskUpdate", patch([{ id: "12", content: "", status: "complete" }])),
+      // The backend leaves `status` off when the update did not set one.
+      todoRow(3, "TaskUpdate", patch([{ id: "12", content: "新标题" }])),
+    ]);
+    expect(items.map(({ id, content, status }) => ({ id, content, status }))).toEqual([
+      { id: "12", content: "新标题", status: "complete" },
+    ]);
+  });
+
+  it("reads a status-less new item as pending", () => {
+    const items = deriveTodoList([todoRow(1, "TaskUpdate", patch([{ id: "7", content: "外部任务" }]))]);
+    expect(items.map(({ id, status }) => ({ id, status }))).toEqual([{ id: "7", status: "pending" }]);
+  });
+
+  it("keeps two tasks that share a subject apart by id", () => {
+    const items = deriveTodoList([
+      todoRow(1, "TaskCreate", patch([{ id: "1", content: "跑测试", status: "pending" }])),
+      todoRow(2, "TaskCreate", patch([{ id: "2", content: "跑测试", status: "pending" }])),
+      todoRow(3, "TaskUpdate", patch([{ id: "1", content: "", status: "complete" }])),
+    ]);
+    expect(items.map(({ id, status }) => ({ id, status }))).toEqual([
+      { id: "1", status: "complete" },
+      { id: "2", status: "pending" },
+    ]);
+  });
+
+  it("still matches an id-less item by content", () => {
+    // omp patches and unpaired creations carry no id; content stays the key.
+    const items = deriveTodoList([
+      todoRow(1, "TaskCreate", patch([{ content: "A", status: "pending" }])),
+      todoRow(2, "TaskCreate", patch([{ id: "1", content: "A", status: "pending" }])),
+    ]);
+    expect(items.map(({ id, content }) => ({ id, content }))).toEqual([{ id: "1", content: "A" }]);
+  });
+});
+
+describe("sameSummaryHistory", () => {
+  it("ignores text growth on answer and thinking rows", () => {
+    const rows: Message[] = [
+      tool(1, "edit_file", { file_path: "/ws/a.ts" }),
+      { seq: 2, role: "thinking", text: "分析", ts: null },
+      { seq: 3, role: "assistant", text: "正在写", ts: null },
+    ];
+    const grown = rows.map((row, i) =>
+      i === 0 ? row : { ...row, text: `${row.text}更多` },
+    );
+    expect(sameSummaryHistory(rows, grown)).toBe(true);
+  });
+
+  it("detects tool payload changes, row changes and appends", () => {
+    const toolRow = tool(1, "edit_file", { file_path: "/ws/a.ts" });
+    const base: Message[] = [
+      { seq: 1, role: "user", text: "改一下", ts: null },
+      toolRow,
+    ];
+    const settled = [base[0], { ...toolRow, result: "ok" }];
+    expect(sameSummaryHistory(base, settled)).toBe(false);
+    expect(sameSummaryHistory(base, [...base, { seq: 2, role: "assistant", text: "好", ts: null }])).toBe(false);
+    expect(
+      sameSummaryHistory(base, [
+        base[0],
+        { ...toolRow, seq: 9 },
+      ]),
+    ).toBe(false);
+  });
+});
