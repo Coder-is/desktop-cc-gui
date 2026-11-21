@@ -1474,6 +1474,14 @@ export const ipc = {
   /** 拉取模型: probe the channel's /v1/models endpoint for its model list. */
   fetchProviderModels: (baseUrl: string, apiKey: string) =>
     invoke<ProviderModelList>("fetch_provider_models", { baseUrl, apiKey }),
+  // ccpl account (desktop only; not routed over web access)
+  ccplAccountStatus: () => invoke<CcplAccountStatus>("ccpl_account_status"),
+  ccplServerInfo: (baseUrl: string) => invoke<CcplServerInfo>("ccpl_server_info", { baseUrl }),
+  ccplCaptcha: (baseUrl: string) => invoke<CcplCaptcha>("ccpl_captcha", { baseUrl }),
+  ccplRegister: (form: CcplCredentials) => invoke<CcplSession>("ccpl_register", { form }),
+  ccplLogin: (form: CcplCredentials) => invoke<CcplSession>("ccpl_login", { form }),
+  ccplMe: (range: "24h" | "7d" | "30d") => invoke<CcplMe>("ccpl_me", { range }),
+  ccplLogout: () => invoke<void>("ccpl_logout"),
   // settings
   getAppSettings: fetchAppSettings,
   /** De-cached read: settings the backend changed on its own (the pairing key
@@ -2186,3 +2194,70 @@ export const ipc = {
   cliUpdate: (engine: string, runId: string) =>
     invoke<{ ok: boolean; version: string | null }>("cli_update", { engine, runId }),
 };
+
+// ── ccpl account ────────────────────────────────────────────────────────────
+
+/** Saved ccpl account; the token itself never leaves the backend here. */
+export interface CcplAccountStatus {
+  signedIn: boolean;
+  baseUrl: string;
+  username: string;
+  tokenHint: string;
+}
+
+export interface CcplServerInfo {
+  registration: boolean;
+  inviteRequired: boolean;
+}
+
+export interface CcplCaptcha {
+  id: string;
+  /** data:image/png;base64,… */
+  image: string;
+}
+
+export interface CcplCredentials {
+  baseUrl: string;
+  username: string;
+  password: string;
+  inviteCode?: string;
+  captchaId?: string;
+  captchaCode?: string;
+}
+
+/** Login / register result. `token` is handed over once so the page can write
+ *  it into the ccpl channels of Claude / Codex / Grok. */
+export interface CcplSession {
+  baseUrl: string;
+  username: string;
+  token: string;
+  quotaPending: boolean;
+}
+
+export interface CcplStatRow {
+  key: string;
+  requests: number;
+  failures: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheWriteTokens: number;
+  cacheReadTokens: number;
+  costNano: number;
+}
+
+/** `GET /v1/me` on the ccpl server. */
+export interface CcplMe {
+  username?: string;
+  label?: string;
+  hint: string;
+  quotaPending: boolean;
+  /** Effective daily cap in USD; 0 = none (or not yet granted when quotaPending). */
+  dailyLimit: number;
+  dailySpent: number;
+  expiresAt?: string;
+  models: string[];
+  restricted: boolean;
+  range: string;
+  usage: { total: CcplStatRow; models: CcplStatRow[]; days: CcplStatRow[] };
+  announcement?: { text: string; level: string };
+}

@@ -5,6 +5,7 @@ pub mod bots;
 pub mod baidu_tongji;
 pub mod browser;
 pub mod cc_switch;
+pub mod ccpl_account;
 pub mod cli_lifecycle;
 pub mod clipboard;
 pub mod computer_use;
@@ -413,6 +414,14 @@ pub fn run() {
             cc_switch::import_cc_switch,
             cc_switch::import_cc_switch_from_path,
             provider_models::fetch_provider_models,
+            // ccpl 账号（只给桌面窗口，不进 web/dispatch.rs）
+            ccpl_account::ccpl_account_status,
+            ccpl_account::ccpl_server_info,
+            ccpl_account::ccpl_captcha,
+            ccpl_account::ccpl_register,
+            ccpl_account::ccpl_login,
+            ccpl_account::ccpl_me,
+            ccpl_account::ccpl_logout,
             // settings
             settings::get_app_settings,
             settings::update_app_settings,

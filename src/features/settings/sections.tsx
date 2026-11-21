@@ -27,6 +27,9 @@ import { cx } from "@/utils/cx";
 import { GeneralSection } from "./GeneralSection";
 import { PetSection } from "./PetSection";
 import { ProxySection } from "./ProxySection";
+import { CcplAccountSection } from "./CcplAccountSection";
+import { isWeb } from "@/lib/transport";
+import UserRound from "lucide-react/dist/esm/icons/user-round";
 import { WorkspacesSection } from "./WorkspacesSection";
 import { ArchivedSessionsSection } from "./ArchivedSessionsSection";
 import { BotsPane } from "./agents-prompts/BotsPane";
@@ -89,6 +92,18 @@ settingsRegistry.register({
   order: 5,
   component: ProxySection,
 });
+// ccpl account: desktop only — its commands are not routed over web access.
+if (!isWeb) {
+  settingsRegistry.register({
+    id: "ccplAccount",
+    key: "ccplAccount",
+    label: () => i18n.t("ccplAccount.title"),
+    icon: UserRound,
+    group: "system",
+    order: 6,
+    component: CcplAccountSection,
+  });
+}
 settingsRegistry.register({
   id: "workspaces",
   key: "workspaces",
