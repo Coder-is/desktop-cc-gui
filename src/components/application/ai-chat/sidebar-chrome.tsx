@@ -8,6 +8,7 @@ import MessageSquarePlus from "lucide-react/dist/esm/icons/message-square-plus";
 import PanelLeft from "lucide-react/dist/esm/icons/panel-left";
 import ScanSearch from "lucide-react/dist/esm/icons/scan-search";
 import Settings from "lucide-react/dist/esm/icons/settings";
+import UsersRound from "lucide-react/dist/esm/icons/users-round";
 import Workflow from "lucide-react/dist/esm/icons/workflow";
 import { Focusable } from "react-aria-components";
 import { Tooltip, TooltipContent } from "@/components/base/tooltip/tooltip";
@@ -227,11 +228,13 @@ export function SidebarPrimaryNav({
   onNewBrowser,
   onOpenPlugins,
   onOpenMission,
+  onOpenBotTeam,
 }: {
   onNewSession?: () => void;
   onNewBrowser?: () => void;
   onOpenPlugins?: () => void;
   onOpenMission?: () => void;
+  onOpenBotTeam?: () => void;
 }) {
   const { t } = useTranslation();
   const pluginEntries = [...useRegistry(sidebarNavRegistry)].sort(compareByOrder);
@@ -244,6 +247,9 @@ export function SidebarPrimaryNav({
       )}
       {onOpenMission && (
         <NavItem icon={Workflow} label={t("mission.title")} onClick={onOpenMission} />
+      )}
+      {onOpenBotTeam && (
+        <NavItem icon={UsersRound} label={t("botTeam.title")} onClick={onOpenBotTeam} />
       )}
       {pluginEntries.map((entry) => (
         <NavItem

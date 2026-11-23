@@ -67,8 +67,8 @@ describe("BetaFeaturesSection", () => {
       el.getAttribute("aria-label"),
     );
     // 任务工作台入口内测暂不放开（beta-features.ts 里已注释），恢复时同步改回
-    // ["新建浏览器入口", "任务工作台入口"]。
-    expect(labels).toEqual(["新建浏览器入口"]);
+    // ["新建浏览器入口", "Bot 团队入口", "任务工作台入口"]。
+    expect(labels).toEqual(["新建浏览器入口", "Bot 团队入口"]);
     for (const label of labels) {
       expect(switchFor(label!).checked).toBe(false);
     }

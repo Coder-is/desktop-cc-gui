@@ -5,6 +5,7 @@ import type { ComposerInputHandle } from "@/components/application/ai-chat/ai-ch
 import { useBrowserStore } from "@/features/browser/store";
 import { useFilesStore } from "@/features/files/store";
 import { useMissionStore } from "@/features/mission/store";
+import { useBotTeamStore } from "@/features/bot-team/store";
 import { usePluginHubStore } from "@/features/plugins/hub/store";
 import type { AiChatRepo, AiChatRepoSection, ThreadAction } from "@/components/application/ai-chat/ai-chat-sidebar";
 import { ARCHIVED_SECTION_ID } from "@/components/application/ai-chat/use-sidebar-state";
@@ -427,6 +428,12 @@ export function useChatSidebar({
     useMissionStore.getState().openWorkbench();
     collapseSidebarOnMobile();
   }, [collapseSidebarOnMobile]);
+  // Bot 团队（内测）：打开或聚焦其中心页签。
+  const handleOpenBotTeam = useCallback(() => {
+    dismissCenterSurfaces();
+    useBotTeamStore.getState().openTab();
+    collapseSidebarOnMobile();
+  }, [collapseSidebarOnMobile]);
   // Sidebar 插件 nav entry（原生）：打开插件中心中心页签（市场 + 已安装管理）。
   const handleOpenPlugins = useCallback(() => {
     dismissCenterSurfaces();
@@ -489,6 +496,7 @@ export function useChatSidebar({
     handleNewBrowser,
     handleOpenPlugins,
     handleOpenMission,
+    handleOpenBotTeam,
     handleReorderWorkspaces,
     handleDropWorkspaceToSection,
     handleCreateGroup,

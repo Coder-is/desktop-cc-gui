@@ -20,6 +20,11 @@ export const BETA_FEATURES = [
     labelKey: "settings.betaNewBrowser",
     descriptionKey: "settings.betaNewBrowserDesc",
   },
+  {
+    id: "botTeam",
+    labelKey: "settings.betaBotTeam",
+    descriptionKey: "settings.betaBotTeamDesc",
+  },
   // 任务工作台入口：内测暂不放开，设置页开关先隐藏。恢复时取消注释，
   // 并删掉 TEMPORARILY_HIDDEN_BETA_FEATURES 里对应的 id。
   // {

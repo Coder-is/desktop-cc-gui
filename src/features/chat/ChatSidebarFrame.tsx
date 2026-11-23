@@ -39,6 +39,7 @@ export function ChatSidebarFrame({
   onNewBrowser,
   onOpenPlugins,
   onOpenMission,
+  onOpenBotTeam,
   onReorderWorkspaces,
   onDropWorkspaceToSection,
   onCreateGroup,
@@ -75,6 +76,8 @@ export function ChatSidebarFrame({
   onOpenPlugins?: () => void;
   /** 任务工作台入口（原生中心页签）。 */
   onOpenMission?: () => void;
+  /** Bot 团队入口（内测中心页签：定时任务 + 群聊）。 */
+  onOpenBotTeam?: () => void;
   onReorderWorkspaces: (orderedIds: string[]) => void;
   /** Workspace row dropped onto a group / 已归档 / ungrouped container. */
   onDropWorkspaceToSection: (workspaceId: string, targetSectionId: string | null) => void;
@@ -121,6 +124,7 @@ export function ChatSidebarFrame({
         onNewBrowser={onNewBrowser}
         onOpenPlugins={onOpenPlugins}
         onOpenMission={onOpenMission}
+        onOpenBotTeam={onOpenBotTeam}
         onReorderWorkspaces={onReorderWorkspaces}
         onDropWorkspaceToSection={onDropWorkspaceToSection}
         onCreateGroup={onCreateGroup}

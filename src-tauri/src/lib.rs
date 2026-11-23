@@ -1,6 +1,7 @@
 pub mod agent_catalog;
 pub mod app_info;
 pub mod app_menu;
+pub mod bot_team;
 pub mod bots;
 pub mod baidu_tongji;
 pub mod browser;
@@ -660,6 +661,21 @@ pub fn run() {
             mission::mission_agent_interrupt,
             translate::translate_text_start,
             translate::translate_text_interrupt,
+            bot_team::bot_team_load,
+            bot_team::bot_routine_save,
+            bot_team::bot_routine_delete,
+            bot_team::bot_routine_claim,
+            bot_team::bot_routine_finish,
+            bot_team::bot_routine_runs,
+            bot_team::bot_routine_run_save,
+            bot_team::bot_group_save,
+            bot_team::bot_group_delete,
+            bot_team::bot_group_messages,
+            bot_team::bot_group_messages_append,
+            bot_team::bot_group_messages_clear,
+            bot_team::bot_agent_start,
+            bot_team::bot_team_parse_start,
+            bot_team::bot_agent_interrupt,
             // web access
             web::web_access_start,
             web::web_access_stop,

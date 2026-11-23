@@ -840,6 +840,95 @@ export interface BotConfig {
   updatedAt: number;
 }
 
+// ---- Bot 团队（bot_team.rs，内测）：定时任务与 Bot 群聊 -----------------
+
+export interface RoutineSchedule {
+  kind: "interval" | "daily" | "weekly";
+  /** interval：每隔多少分钟（5 ~ 10080）。 */
+  everyMinutes?: number;
+  /** daily / weekly：本地时间 HH:MM。 */
+  time?: string;
+  /** weekly：0=周日 … 6=周六。 */
+  weekdays?: number[];
+}
+
+export interface BotRoutine {
+  id: string;
+  botId: string;
+  name: string;
+  prompt: string;
+  schedule: RoutineSchedule;
+  engine: string;
+  workspacePath: string;
+  model?: string | null;
+  providerId?: string | null;
+  enabled: boolean;
+  missedPolicy: "skip" | "run_once";
+  createdAt: number;
+  updatedAt: number;
+  /** 最近一次被认领的计划时刻（毫秒）；后端 claim 只接受更晚的时刻。 */
+  lastSlotAt?: number | null;
+  lastRunAt?: number | null;
+  lastStatus?: "ok" | "error" | "cancelled" | null;
+  lastError?: string | null;
+}
+
+export interface BotRoutineRun {
+  id: string;
+  routineId: string;
+  botId: string;
+  trigger: "schedule" | "manual" | "catchup";
+  startedAt: number;
+  finishedAt?: number | null;
+  status: "running" | "ok" | "error" | "cancelled";
+  output: string;
+  error?: string | null;
+  sessionId?: string | null;
+}
+
+export interface BotGroup {
+  id: string;
+  name: string;
+  memberBotIds: string[];
+  engine: string;
+  workspacePath: string;
+  model?: string | null;
+  providerId?: string | null;
+  maxRounds: number;
+  maxBotMessagesPerSend: number;
+  /** 每个成员在本群的引擎会话 id（续接）。 */
+  memberSessions: Record<string, string>;
+  /** 有成员 @user 后为 true，用户下一次发言清除。 */
+  needsUser: boolean;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface BotGroupMessage {
+  id: string;
+  groupId: string;
+  /** "user" 或成员 bot id。 */
+  author: string;
+  text: string;
+  createdAt: number;
+  status?: "ok" | "error" | null;
+}
+
+export interface BotTeamState {
+  routines: BotRoutine[];
+  groups: BotGroup[];
+}
+
+/** bot_agent_start 的返回：后端按 Bot 权限与引擎决定的启动方案。 */
+export interface BotTurnStarted {
+  runId: string;
+  sessionId: string | null;
+  /** false = 这一档不续接会话（如 Codex 只读档），下次仍要带 Bot 提示词块。 */
+  resumable: boolean;
+  /** 这一轮是否挂了记忆工具。 */
+  memory: boolean;
+}
+
 /** 一条持久记忆（memory/mcp.rs）。`target=user` 的条目全局共用、`botId` 为空；
  *  `target=memory` 的条目属于 `botId` 这一个 Bot。 */
 export interface MemoryEntry {
@@ -1870,6 +1959,48 @@ export const ipc = {
     invoke<BotConfig | null>("bot_update", { id, patch }),
   deleteBot: (id: string) => invoke<boolean>("bot_delete", { id }),
   duplicateBot: (id: string) => invoke<BotConfig | null>("bot_duplicate", { id }),
+  // Bot 团队（bot_team.rs，内测，仅桌面端：命令不进 web 访问白名单）。
+  botTeamLoad: () => invoke<BotTeamState>("bot_team_load"),
+  botRoutineSave: (routine: BotRoutine) => invoke<BotRoutine>("bot_routine_save", { routine }),
+  botRoutineDelete: (id: string) => invoke<boolean>("bot_routine_delete", { id }),
+  /** 认领一次计划触发；null = 已被别的窗口认领或任务已删除。 */
+  botRoutineClaim: (id: string, slotAt: number) =>
+    invoke<BotRoutine | null>("bot_routine_claim", { id, slotAt }),
+  botRoutineFinish: (id: string, status: "ok" | "error" | "cancelled", error: string | null) =>
+    invoke<BotRoutine | null>("bot_routine_finish", { id, status, error }),
+  botRoutineRuns: (routineId: string) =>
+    invoke<BotRoutineRun[]>("bot_routine_runs", { routineId }),
+  botRoutineRunSave: (run: BotRoutineRun) => invoke<void>("bot_routine_run_save", { run }),
+  botGroupSave: (group: BotGroup) => invoke<BotGroup>("bot_group_save", { group }),
+  botGroupDelete: (id: string) => invoke<boolean>("bot_group_delete", { id }),
+  botGroupMessages: (groupId: string) =>
+    invoke<BotGroupMessage[]>("bot_group_messages", { groupId }),
+  botGroupMessagesAppend: (groupId: string, messages: BotGroupMessage[]) =>
+    invoke<void>("bot_group_messages_append", { groupId, messages }),
+  botGroupMessagesClear: (groupId: string) =>
+    invoke<void>("bot_group_messages_clear", { groupId }),
+  /** Bot 后台轮次（runId 前缀 botteam-）；事件走 mission-agent://event。
+   *  permissionMode 是 Bot 的权限设置：ask 只给只读工具，引擎兑现不了直接拒绝。 */
+  botAgentStart: (args: {
+    runId: string;
+    engine: string;
+    workspacePath: string;
+    sessionId: string | null;
+    prompt: string;
+    model: string | null;
+    providerId: string | null;
+    permissionMode: string;
+    memoryBot: string | null;
+  }) => invoke<BotTurnStarted>("bot_agent_start", args),
+  /** 一句话 → 定时任务草稿：零工具纯文本轮次（runId 前缀 botteam-parse-）。 */
+  botTeamParseStart: (args: {
+    runId: string;
+    engine: string;
+    prompt: string;
+    model: string | null;
+    providerId: string | null;
+  }) => invoke<SendResult>("bot_team_parse_start", args),
+  botAgentInterrupt: (runId: string) => invoke<boolean>("bot_agent_interrupt", { runId }),
   // 记忆（memory/mcp.rs）：两个账本、写入前扫描 + 容量闸。写入失败时 reject
   // 的值是 MemoryErrorPayload（对象，或 JSON 字符串）——用 memoryErrorMessage
   // 转成用户可读文案。

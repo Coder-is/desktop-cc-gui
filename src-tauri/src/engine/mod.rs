@@ -904,6 +904,55 @@ pub(crate) async fn mission_agent_send(
     .await
 }
 
+/// Codex 经审计的只读档（隔离 home + 只读沙箱，见 codex_read_only.rs）。
+/// Codex 不支持逐次工具白名单，bot_team 的「每次询问」后台轮次用这一档
+/// 代替；这一档不续接会话（每次都是新线程）。
+pub(crate) fn codex_read_only_permission() -> &'static str {
+    codex_read_only::PERMISSION
+}
+
+/// Bot 团队后台轮次入口（bot_team::bot_agent_start 调用：定时任务、群聊
+/// 成员）。同一条 spawn/reader/registry 管线，事件借用任务工作台的
+/// `mission-agent://event` 流（前端按 run id 路由）。权限档与工具白名单由
+/// bot_team 按 Bot 设置映射后传入；白名单引擎兑现不了时 prepare_launch
+/// 直接拒绝。memory_bot 挂载该 Bot 的记忆工具，与聊天发送同一规则。
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn bot_team_agent_send(
+    state: &crate::AppState,
+    engine: String,
+    workspace_path: String,
+    session_id: Option<String>,
+    prompt: String,
+    model: Option<String>,
+    permission: Option<String>,
+    provider_id: Option<String>,
+    run_id: String,
+    memory_bot: Option<String>,
+    allowed_tools: Option<Vec<String>>,
+) -> Result<SendResult, String> {
+    send_message_inner_with_sink(
+        state,
+        Arc::clone(&state.mission_sink),
+        engine,
+        workspace_path,
+        session_id,
+        prompt,
+        Vec::new(),
+        None,
+        None,
+        model,
+        None,
+        permission,
+        provider_id,
+        Some(run_id),
+        None,
+        memory_bot,
+        allowed_tools,
+        false,
+    )
+    .await
+}
+
 /// 纯文本翻译轮次入口（translate::translate_text_start 调用）：同一条
 /// spawn/reader/registry 管线，事件借用任务工作台的 `mission-agent://event`
 /// 流（前端按 run id 路由，未登记的 run 被忽略）。`no_tools` 恒为真：

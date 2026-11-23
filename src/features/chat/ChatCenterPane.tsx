@@ -23,6 +23,10 @@ const MissionWorkbench = lazy(() =>
     default: m.MissionWorkbench,
   })),
 );
+// Bot 团队（内测）只在打开时加载。
+const BotTeamPane = lazy(() =>
+  import("@/features/bot-team/components/BotTeamPane").then((m) => ({ default: m.BotTeamPane })),
+);
 // 插件 hub 也在打开时才加载（插件商店/管理不是启动路径）。
 const PluginHub = lazy(() =>
   import("@/features/plugins/hub/PluginHub").then((m) => ({ default: m.PluginHub })),
@@ -80,6 +84,7 @@ function centerSurfaces(input: {
   activePluginTabId: string | null;
   pluginHubActive: boolean;
   missionActive: boolean;
+  botTeamActive: boolean;
   notesActive: boolean;
   diffOpen: boolean;
 }): {
@@ -89,6 +94,7 @@ function centerSurfaces(input: {
   plugin: boolean;
   hub: boolean;
   mission: boolean;
+  botTeam: boolean;
   notes: boolean;
 } {
   if (input.diffOpen) {
@@ -99,6 +105,7 @@ function centerSurfaces(input: {
       plugin: false,
       hub: false,
       mission: false,
+      botTeam: false,
       notes: false,
     };
   }
@@ -106,10 +113,12 @@ function centerSurfaces(input: {
   const pluginInView = input.activePluginTabId !== null;
   const hubInView = input.pluginHubActive && !input.missionActive;
   const missionInView = input.missionActive;
+  // Bot 团队排在任务工作台、插件中心之后：同一提交里撞上时让位给它们。
+  const botTeamInView = input.botTeamActive && !missionInView && !hubInView;
   // 版本更新说明是最弱的单实例面：它由更新检查自动弹出，不该抢用户正在看的
   // 插件中心 / 任务工作台（自动弹出时若前两者在视，页签高亮先落到自己的页签，
   // 用户点一下即可切回来）。
-  const notesInView = input.notesActive && !missionInView && !hubInView;
+  const notesInView = input.notesActive && !missionInView && !hubInView && !botTeamInView;
   return {
     chat: !(
       input.activeFilePath ||
@@ -117,6 +126,7 @@ function centerSurfaces(input: {
       pluginInView ||
       hubInView ||
       missionInView ||
+      botTeamInView ||
       notesInView
     ),
     editor:
@@ -125,11 +135,13 @@ function centerSurfaces(input: {
       !pluginInView &&
       !hubInView &&
       !missionInView &&
+      !botTeamInView &&
       !notesInView,
-    browser: browserInView && !missionInView && !hubInView && !notesInView,
-    plugin: pluginInView && !missionInView && !hubInView && !notesInView,
+    browser: browserInView && !missionInView && !hubInView && !botTeamInView && !notesInView,
+    plugin: pluginInView && !missionInView && !hubInView && !botTeamInView && !notesInView,
     hub: hubInView,
     mission: missionInView,
+    botTeam: botTeamInView,
     notes: notesInView,
   };
 }
@@ -152,6 +164,8 @@ export function ChatCenterPane({
   pluginHubActive,
   missionOpen,
   missionActive,
+  botTeamOpen,
+  botTeamActive,
   notesOpen,
   notesActive,
   diffView,
@@ -178,6 +192,9 @@ export function ChatCenterPane({
   /** 任务工作台中心页签：是否打开 / 是否在视。 */
   missionOpen: boolean;
   missionActive: boolean;
+  /** Bot 团队中心页签（内测）：是否打开 / 是否在视。 */
+  botTeamOpen: boolean;
+  botTeamActive: boolean;
   /** 版本更新说明中心页签（更新检查发现新版本时自动打开）：是否打开 / 是否在视。 */
   notesOpen: boolean;
   notesActive: boolean;
@@ -204,6 +221,7 @@ export function ChatCenterPane({
     activePluginTabId,
     pluginHubActive,
     missionActive,
+    botTeamActive,
     notesActive,
     diffOpen: diffView !== null,
   });
@@ -269,6 +287,15 @@ export function ChatCenterPane({
         <Surface visible={surfaces.mission}>
           <Suspense fallback={<CenteredSpinner />}>
             <MissionWorkbench />
+          </Suspense>
+        </Surface>
+      )}
+
+      {/* Bot 团队（内测单实例页签）：打开后保持挂载，群聊与运行记录不因切走而丢。 */}
+      {botTeamOpen && (
+        <Surface visible={surfaces.botTeam}>
+          <Suspense fallback={<CenteredSpinner />}>
+            <BotTeamPane />
           </Suspense>
         </Surface>
       )}

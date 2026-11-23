@@ -7,6 +7,7 @@ import { AppStatusBar } from "@/components/application/app-status-bar/app-status
 import { isWeb } from "@/lib/platform";
 import { useTitlebarStyle } from "@/features/settings/titlebar";
 import { useBetaFeature } from "@/features/settings/beta-features";
+import { useRoutineScheduler } from "@/features/bot-team/use-routine-scheduler";
 import PanelLeftOpen from "lucide-react/dist/esm/icons/panel-left-open";
 import { TerminalDock } from "@/features/terminal/TerminalDock";
 import { useTerminalStore } from "@/features/terminal/store";
@@ -147,6 +148,8 @@ export default function ChatPage() {
     pluginHubActive,
     missionOpen,
     missionActive,
+    botTeamOpen,
+    botTeamActive,
     notesOpen,
     notesActive,
     diffView,
@@ -175,6 +178,7 @@ export default function ChatPage() {
     handleNewBrowser,
     handleOpenPlugins,
     handleOpenMission,
+    handleOpenBotTeam,
     handleReorderWorkspaces,
     handleDropWorkspaceToSection,
     handleCreateGroup,
@@ -192,6 +196,10 @@ export default function ChatPage() {
   // 内测功能（设置 → 其他 → 内测功能，默认关闭）：入口按开关显示/隐藏。
   const betaNewBrowser = useBetaFeature("newBrowser");
   const betaMissionWorkbench = useBetaFeature("missionWorkbench");
+  // Bot 团队（定时任务 + 群聊）只在桌面端：命令不进 web 访问白名单。开关关闭时
+  // 调度器不挂载——不只是藏起入口。
+  const betaBotTeam = useBetaFeature("botTeam") && !isWeb;
+  useRoutineScheduler(betaBotTeam);
 
   // ⌘W: close the tab in view, same path as the tab strip's × (a dirty file
   // still routes through the save-confirm dialog — unsaved edits are never
@@ -250,6 +258,7 @@ export default function ChatPage() {
         onNewBrowser={!isWeb && betaNewBrowser ? handleNewBrowser : undefined}
         onOpenPlugins={handleOpenPlugins}
         onOpenMission={betaMissionWorkbench ? handleOpenMission : undefined}
+        onOpenBotTeam={betaBotTeam ? handleOpenBotTeam : undefined}
         onReorderWorkspaces={handleReorderWorkspaces}
         onDropWorkspaceToSection={handleDropWorkspaceToSection}
         onCreateGroup={handleCreateGroup}
@@ -330,6 +339,8 @@ export default function ChatPage() {
             pluginHubActive={pluginHubActive}
             missionOpen={missionOpen}
             missionActive={missionActive}
+            botTeamOpen={botTeamOpen && !isWeb}
+            botTeamActive={botTeamActive && !isWeb}
             notesOpen={notesOpen}
             notesActive={notesActive}
             diffView={diffView}

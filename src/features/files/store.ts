@@ -3,6 +3,7 @@ import { create } from "zustand";
 import { useBrowserStore } from "@/features/browser/store";
 import { useGitStore } from "@/features/git/store";
 import { useMissionStore } from "@/features/mission/store";
+import { useBotTeamStore } from "@/features/bot-team/store";
 import { usePluginHubStore } from "@/features/plugins/hub/store";
 import { usePluginTabsStore } from "@/features/plugins/runtime/center-tabs";
 import { useChatStore } from "@/features/chat/store";
@@ -271,6 +272,7 @@ function dismissNonFileSurfaces() {
   usePluginTabsStore.getState().deactivate();
   usePluginHubStore.getState().deactivate();
   useMissionStore.getState().deactivate();
+  useBotTeamStore.getState().deactivate();
   useReleaseNotesTabStore.getState().deactivate();
 }
 

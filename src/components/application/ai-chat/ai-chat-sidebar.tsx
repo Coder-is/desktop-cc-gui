@@ -48,6 +48,7 @@ export function AiChatSidebar({
   onNewBrowser,
   onOpenPlugins,
   onOpenMission,
+  onOpenBotTeam,
   onReorderWorkspaces,
   onThreadAction,
   onCopyThreadId,
@@ -109,6 +110,8 @@ export function AiChatSidebar({
   onOpenPlugins?: () => void;
   /** 任务工作台入口（原生中心页签；替换原「自动化」占位项）。 */
   onOpenMission?: () => void;
+  /** Bot 团队入口（内测中心页签：定时任务 + 群聊）。 */
+  onOpenBotTeam?: () => void;
   onOpenSettings?: () => void;
   /** Replaces the footer's 设置 row (sidebar account menu). */
   accountMenu?: ReactNode;
@@ -181,6 +184,7 @@ export function AiChatSidebar({
             onNewBrowser={onNewBrowser}
             onOpenPlugins={onOpenPlugins}
             onOpenMission={onOpenMission}
+            onOpenBotTeam={onOpenBotTeam}
           />
 
           <WorkspaceSection
