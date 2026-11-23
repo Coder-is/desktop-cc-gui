@@ -6,6 +6,9 @@ import {
   heatmapWeeks,
   initials,
   monthLabels,
+  folderName,
+  peakHour,
+  usageInsights,
   quotaUsage,
   untilQuotaReset,
   summarize,
@@ -143,5 +146,37 @@ describe("quota reset and usage", () => {
     expect(quotaUsage(4, 5).tone).toBe("warning");
     expect(quotaUsage(6, 5)).toEqual({ ratio: 1, percent: 120, tone: "exceeded" });
     expect(quotaUsage(1, 0)).toEqual({ ratio: 0, percent: 0, tone: "normal" });
+  });
+});
+
+describe("insights", () => {
+  it("finds the top CLI, model and project with their shares, and the cache hit rate", () => {
+    const rows = [
+      { ...row("2026-11-20", "claude", "claude-opus-5-5", 600), project: "D:\\work\\ccpl", cacheRead: 300, cacheWrite: 100 },
+      { ...row("2026-11-21", "codex", "gpt-6.2", 400), project: "/home/me/api" },
+    ];
+    // tokens: claude 600+300+100 = 1000, codex 400 → total 1400.
+    const insights = usageInsights(rows);
+    expect(insights.topEngine).toEqual({ engine: "claude", share: 1000 / 1400 });
+    expect(insights.topModel).toEqual({ engine: "claude", model: "claude-opus-5-5", share: 1000 / 1400 });
+    expect(insights.topProject?.path).toBe("D:\\work\\ccpl");
+    // prompt = (600+300+100) + 400 = 1400, cached = 300.
+    expect(insights.cacheHitRate).toBeCloseTo(300 / 1400);
+    expect(folderName("D:\\work\\ccpl")).toBe("ccpl");
+    expect(folderName("/home/me/api/")).toBe("api");
+  });
+
+  it("has nothing to say without usage", () => {
+    expect(usageInsights([])).toEqual({ topEngine: null, topModel: null, topProject: null, cacheHitRate: null });
+    expect(peakHour([])).toBeNull();
+  });
+
+  it("picks the hour with the most requests across days", () => {
+    const hourly = [
+      { ...row("2026-11-20T09", "claude", "m", 1), requests: 3 },
+      { ...row("2026-11-21T21", "claude", "m", 1), requests: 2 },
+      { ...row("2026-11-22T21", "codex", "m", 1), requests: 2 },
+    ];
+    expect(peakHour(hourly)).toBe(21);
   });
 });

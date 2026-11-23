@@ -9,13 +9,16 @@ import { ipc, type AccountUsageResponse, type CcplAccountStatus, type CcplMe } f
 import { AccountAvatar, quotaLine } from "./AccountMenu";
 import {
   addDays,
+  folderName,
   groupByEngine,
   heatmapWeeks,
   localDay,
   monthLabels,
+  peakHour,
   quotaUsage,
   summarize,
   untilQuotaReset,
+  usageInsights,
   weeklyTotals,
   type HeatCell,
 } from "./account-usage";
@@ -24,6 +27,8 @@ import {
 const USAGE_CHANGED_EVENT = "usage-stats://changed";
 /** The query spans the backend's maximum range, so 累计 covers all history. */
 const HISTORY_DAYS = 3650;
+/** 最活跃时段 looks at recent habits only (and keeps the hourly query small). */
+const PEAK_HOUR_DAYS = 30;
 
 type Breakdown = "today" | "7d" | "30d" | "all";
 type HeatMode = "day" | "week";
@@ -146,6 +151,15 @@ function Stat({ value, label }: { value: string; label: string }) {
   );
 }
 
+function Insight({ label, value, title, mono }: { label: string; value: string; title?: string; mono?: boolean }) {
+  return (
+    <div className="flex items-center justify-between gap-4" title={title}>
+      <span className="text-body-2-regular text-text-secondary">{label}</span>
+      <span className={cx("truncate text-body-2-medium text-text-primary", mono && "font-mono")}>{value}</span>
+    </div>
+  );
+}
+
 function Cell({ level, title, future }: { level: HeatCell["level"]; title: string; future?: boolean }) {
   return (
     <span
@@ -174,6 +188,7 @@ export function AccountUsagePanel() {
   const [breakdown, setBreakdown] = useState<Breakdown>("today");
   const [heatMode, setHeatMode] = useState<HeatMode>("day");
   const [today, setToday] = useState(() => localDay(new Date()));
+  const [hourRows, setHourRows] = useState<AccountUsageResponse["rows"]>([]);
 
   const refreshAction = useActionFeedback({ spin: true });
 
@@ -183,15 +198,14 @@ export function AccountUsagePanel() {
     setToday(now);
     setLoading(true);
     setError(null);
+    const tzOffsetMinutes = -new Date().getTimezoneOffset();
     try {
-      setData(
-        await ipc.accountUsageQuery({
-          from: addDays(now, -(HISTORY_DAYS - 1)),
-          to: now,
-          bucket: "day",
-          tzOffsetMinutes: -new Date().getTimezoneOffset(),
-        }),
-      );
+      const [daily, hourly] = await Promise.all([
+        ipc.accountUsageQuery({ from: addDays(now, -(HISTORY_DAYS - 1)), to: now, bucket: "day", tzOffsetMinutes }),
+        ipc.accountUsageQuery({ from: addDays(now, -(PEAK_HOUR_DAYS - 1)), to: now, bucket: "hour", tzOffsetMinutes }),
+      ]);
+      setData(daily);
+      setHourRows(hourly?.rows ?? []);
       return true;
     } catch (e) {
       setError(String(e));
@@ -237,6 +251,9 @@ export function AccountUsagePanel() {
     breakdown === "today" ? today : breakdown === "7d" ? addDays(today, -6) : breakdown === "30d" ? addDays(today, -29) : null;
   const engines = useMemo(() => groupByEngine(rows, fromDay), [rows, fromDay]);
   const engineLabel = (id: string) => t(`settings.engines.${id}`, { defaultValue: id });
+  const insights = useMemo(() => usageInsights(rows), [rows]);
+  const busiestHour = useMemo(() => peakHour(hourRows), [hourRows]);
+  const percent = (share: number) => `${Math.round(share * 100)}%`;
 
   return (
     <div className="flex w-full flex-col gap-5">
@@ -347,6 +364,32 @@ export function AccountUsagePanel() {
           </div>
         )}
       </div>
+
+      {known && insights.topEngine && (
+        <div className="flex flex-col gap-2">
+          <span className="px-1 text-body-2-medium text-text-primary">{t("account.insights")}</span>
+          <div className="flex flex-col gap-2.5 px-1">
+            <Insight label={t("account.topEngine")} value={`${engineLabel(insights.topEngine.engine)} · ${percent(insights.topEngine.share)}`} />
+            {insights.topModel && (
+              <Insight label={t("account.topModel")} value={`${insights.topModel.model || "—"} · ${percent(insights.topModel.share)}`} mono />
+            )}
+            {insights.topProject && (
+              <Insight
+                label={t("account.topProject")}
+                value={`${folderName(insights.topProject.path)} · ${percent(insights.topProject.share)}`}
+                title={insights.topProject.path}
+              />
+            )}
+            {busiestHour != null && (
+              <Insight label={t("account.peakHour")} value={t("account.hourRange", { from: busiestHour, to: (busiestHour + 1) % 24 })} />
+            )}
+            {insights.cacheHitRate != null && (
+              <Insight label={t("account.cacheHitRate")} value={percent(insights.cacheHitRate)} />
+            )}
+            {data?.firstDay && <Insight label={t("account.since")} value={data.firstDay} />}
+          </div>
+        </div>
+      )}
 
       <div className="flex flex-wrap items-center justify-between gap-2 px-1">
         <p className="text-caption-1-regular text-text-tertiary">

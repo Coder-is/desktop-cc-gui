@@ -123,6 +123,9 @@ describe("AccountUsagePanel", () => {
     expect(text).toContain("$0.75");
     // Heaviest CLI first.
     expect(text.indexOf("claude-opus-5-5")).toBeLessThan(text.indexOf("gpt-6.2"));
+    // Insights: top CLI and model by tokens (1500 of 2000 = 75%).
+    expect(text).toContain(i18n.t("account.insights"));
+    expect(text).toContain("claude-opus-5-5 · 75%");
   });
 
   it("shows placeholders, not zeros, until the first answer lands", async () => {

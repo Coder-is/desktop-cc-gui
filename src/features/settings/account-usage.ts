@@ -223,3 +223,64 @@ export function quotaUsage(spent: number, limit: number): { ratio: number; perce
   const tone: QuotaTone = raw >= 1 ? "exceeded" : raw >= 0.8 ? "warning" : "normal";
   return { ratio: Math.min(1, raw), percent: Math.round(raw * 100), tone };
 }
+
+export interface UsageInsights {
+  topEngine: { engine: string; share: number } | null;
+  topModel: { engine: string; model: string; share: number } | null;
+  /** Session working directory with the most tokens. */
+  topProject: { path: string; share: number } | null;
+  /** Share of prompt tokens served from cache: read / (input + read + write). */
+  cacheHitRate: number | null;
+}
+
+function topOf(totals: Map<string, number>, all: number): { key: string; share: number } | null {
+  let best: { key: string; tokens: number } | null = null;
+  for (const [key, tokens] of totals) if (tokens > 0 && (!best || tokens > best.tokens)) best = { key, tokens };
+  return best && all > 0 ? { key: best.key, share: best.tokens / all } : null;
+}
+
+export function usageInsights(rows: AccountUsageRow[]): UsageInsights {
+  const engines = new Map<string, number>();
+  const models = new Map<string, number>();
+  const projects = new Map<string, number>();
+  let all = 0;
+  let prompt = 0;
+  let cached = 0;
+  for (const row of rows) {
+    const tokens = rowTokens(row);
+    all += tokens;
+    engines.set(row.engine, (engines.get(row.engine) ?? 0) + tokens);
+    const modelKey = `${row.engine}\u0000${row.model}`;
+    models.set(modelKey, (models.get(modelKey) ?? 0) + tokens);
+    if (row.project) projects.set(row.project, (projects.get(row.project) ?? 0) + tokens);
+    prompt += row.input + row.cacheRead + row.cacheWrite;
+    cached += row.cacheRead;
+  }
+  const engine = topOf(engines, all);
+  const model = topOf(models, all);
+  const project = topOf(projects, all);
+  const [modelEngine, modelId] = model ? model.key.split("\u0000") : ["", ""];
+  return {
+    topEngine: engine && { engine: engine.key, share: engine.share },
+    topModel: model && { engine: modelEngine, model: modelId, share: model.share },
+    topProject: project && { path: project.key, share: project.share },
+    cacheHitRate: prompt > 0 ? cached / prompt : null,
+  };
+}
+
+/** Local hour (0–23) with the most requests in hourly rows (`YYYY-MM-DDTHH`). */
+export function peakHour(hourRows: AccountUsageRow[]): number | null {
+  const byHour = new Array<number>(24).fill(0);
+  for (const row of hourRows) {
+    const hour = Number(row.bucket.slice(11, 13));
+    if (Number.isInteger(hour) && hour >= 0 && hour < 24) byHour[hour] += row.requests;
+  }
+  const max = Math.max(...byHour);
+  return max > 0 ? byHour.indexOf(max) : null;
+}
+
+/** Last path segment, for showing a project folder by name. */
+export function folderName(path: string): string {
+  const parts = path.split(/[\\/]+/).filter(Boolean);
+  return parts[parts.length - 1] ?? path;
+}

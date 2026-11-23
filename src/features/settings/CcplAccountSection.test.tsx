@@ -184,7 +184,8 @@ describe("CcplAccountSection signed in on a server without /v1/me", () => {
     expect(container.querySelector('[role="alert"]')).toBeNull();
     expect(container.querySelector('[role="status"]')?.textContent).toBe(i18n.t("account.serverNoQuota"));
     // Local usage panel rendered and queried; quota range buttons hidden without data.
-    expect(accountUsageQuery).toHaveBeenCalledTimes(1);
+    // One daily (whole history) and one hourly (busiest hour) query per page open.
+    expect(accountUsageQuery.mock.calls.map(([q]) => (q as { bucket: string }).bucket)).toEqual(["day", "hour"]);
     expect(container.textContent).toContain(i18n.t("account.todayTokens"));
     expect(container.textContent).not.toContain(i18n.t("ccplAccount.range24h"));
   });
