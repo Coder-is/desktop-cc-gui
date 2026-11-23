@@ -1107,6 +1107,21 @@ fn row_name(command: &str) -> String {
 
 /// Copy the named keys of `value` into a fresh object, dropping absent and null
 /// ones so a tool row's args or result panel never shows empty slots.
+/// `turn/start.summary` sent when the user has not chosen one: "auto" lets
+/// the model return a readable reasoning summary (codex-cli 0.171 schema:
+/// auto | concise | detailed | none).
+const DEFAULT_REASONING_SUMMARY: &str = "auto";
+
+/// True when `<codex home>/config.toml` sets a top-level
+/// `model_reasoning_summary` — codex applies it itself, and a turn-level
+/// override would silently replace the user's choice (e.g. "none").
+fn user_sets_reasoning_summary(codex_home: &std::path::Path) -> bool {
+    std::fs::read_to_string(codex_home.join("config.toml"))
+        .ok()
+        .and_then(|text| text.parse::<toml::Table>().ok())
+        .is_some_and(|table| table.contains_key("model_reasoning_summary"))
+}
+
 fn pick(value: &Value, keys: &[&str]) -> Value {
     let mut out = Map::new();
     for key in keys {
@@ -1767,6 +1782,13 @@ async fn handshake_and_start(
         verify_plan_item(server, core, state, view, &thread_id, check, killed).await?;
     }
     let mut turn_params = json!({ "threadId": thread_id, "input": turn_input(req) });
+    // Without a summary request the model returns reasoning only as encrypted
+    // content (summary: []), so the timeline has no 思考 rows. Ask for the
+    // readable summary — unless the user set model_reasoning_summary
+    // themselves, which codex already applies from config.toml.
+    if !user_sets_reasoning_summary(&super::codex_home()) {
+        turn_params["summary"] = json!(DEFAULT_REASONING_SUMMARY);
+    }
     if codex_read_only::requested(req) {
         turn_params["approvalPolicy"] = json!("never");
         turn_params["sandboxPolicy"] = json!({"type":"readOnly","networkAccess":false});
@@ -2673,6 +2695,24 @@ mod tests {
     }
 
     #[test]
+    fn reasoning_summary_respects_the_users_config_toml() {
+        let home = std::env::temp_dir().join(format!("ccgui-codex-summary-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&home).unwrap();
+        let absent = user_sets_reasoning_summary(&home);
+        std::fs::write(home.join("config.toml"), "model = \"gpt\"\n[profiles.x]\nmodel_reasoning_summary = \"none\"\n").unwrap();
+        let only_in_table = user_sets_reasoning_summary(&home);
+        std::fs::write(home.join("config.toml"), "model_reasoning_summary = \"none\"\nmodel = \"gpt\"\n").unwrap();
+        let top_level = user_sets_reasoning_summary(&home);
+        std::fs::write(home.join("config.toml"), "not = [valid").unwrap();
+        let broken = user_sets_reasoning_summary(&home);
+        std::fs::remove_dir_all(&home).ok();
+        assert!(!absent, "no config.toml → request a summary");
+        assert!(!only_in_table, "a profile-scoped key is not the top-level default");
+        assert!(top_level, "the user's own choice wins");
+        assert!(!broken, "an unreadable config falls back to requesting a summary");
+    }
+
+    #[test]
     fn resumed_threads_skip_full_history_hydration() {
         let (method, params) = thread_open_request(Some("thread-123"));
         assert_eq!(method, "thread/resume");
@@ -2691,6 +2731,7 @@ mod tests {
         let peer = r#"
 const assert = require('node:assert/strict');
 const mode = process.argv[1];
+const expectedSummary = process.argv[2] === '-' ? undefined : process.argv[2];
 const resumed = mode !== 'new';
 const methods = ['initialize', resumed ? 'thread/resume' : 'thread/start'];
 if (mode === 'decision') methods.push('thread/turns/list');
@@ -2718,6 +2759,9 @@ require('node:readline').createInterface({input: process.stdin}).on('line', line
     assert.equal(params.threadId, 'thread-123');
     assert.equal(params.input[0].text, 'Continue the conversation');
     assert.equal(params.history, undefined);
+    // Readable reasoning summary is requested on every turn shape unless the
+    // user's config.toml sets model_reasoning_summary.
+    assert.equal(params.summary, expectedSummary);
     if (resumed) {
       // A plain resumed turn restates Default too: an earlier planning turn
       // left Plan Mode instructions in the thread that only a mode change ends.
@@ -2734,9 +2778,14 @@ require('node:readline').createInterface({input: process.stdin}).on('line', line
   });
 });
 "#;
+        let expected_summary = if user_sets_reasoning_summary(&super::super::codex_home()) {
+            "-"
+        } else {
+            DEFAULT_REASONING_SUMMARY
+        };
         for mode in ["new", "resume", "decision"] {
             let mut child = Command::new("node")
-                .args(["-e", peer, mode])
+                .args(["-e", peer, mode, expected_summary])
                 .stdin(Stdio::piped())
                 .stdout(Stdio::piped())
                 .kill_on_drop(true)
