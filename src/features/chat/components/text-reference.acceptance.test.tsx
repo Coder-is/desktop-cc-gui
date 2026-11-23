@@ -236,7 +236,8 @@ describe("#1521 text reference acceptance", () => {
     } else {
       await act(async () => button(HEADER)!.click());
     }
-    expect(transport.readFile).toHaveBeenCalledExactlyOnceWith(FILE);
+    // No encoding override was chosen, so the store forwards `undefined` (backend default).
+    expect(transport.readFile).toHaveBeenCalledExactlyOnceWith(FILE, undefined);
     expect(useFilesStore.getState().activeFilePath).toBe(FILE);
     expect(selectedText()).toBe(scenario === "shortened" ? "only remaining line" : "new two\nnew three");
     expect(container.textContent).toContain(">     unsaved");
