@@ -13,7 +13,9 @@ import {
   heatmapWeeks,
   localDay,
   monthLabels,
+  quotaUsage,
   summarize,
+  untilQuotaReset,
   weeklyTotals,
   type HeatCell,
 } from "./account-usage";
@@ -50,16 +52,75 @@ export function AccountProfileHeader({ status, me }: { status: CcplAccountStatus
       <AccountAvatar name={name} size="lg" />
       <span className="mt-1 text-title-3-medium text-text-primary">{name}</span>
       <span className="font-mono text-caption-1-regular text-text-tertiary">@{hostOf(status.baseUrl)}</span>
-      {line && (
-        <span
-          className={cx(
-            "text-caption-1-regular",
-            me?.quotaPending ? "text-text-error-primary" : "text-text-secondary",
-          )}
-        >
-          {line}
-        </span>
+      {me && !me.quotaPending && me.dailyLimit > 0 ? (
+        <QuotaBar spent={me.dailySpent} limit={me.dailyLimit} />
+      ) : (
+        line && (
+          <span
+            className={cx(
+              "text-caption-1-regular",
+              me?.quotaPending ? "text-text-error-primary" : "text-text-secondary",
+            )}
+          >
+            {line}
+          </span>
+        )
       )}
+    </div>
+  );
+}
+
+const TONE_FILL = {
+  normal: "bg-button-primary",
+  warning: "bg-text-warning-primary",
+  exceeded: "bg-text-error-primary",
+} as const;
+
+/** Re-render once a minute so the reset countdown stays honest while the page
+ *  is open; the interval goes with the component. */
+function useMinuteClock(): Date {
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(new Date()), 60_000);
+    return () => window.clearInterval(timer);
+  }, []);
+  return now;
+}
+
+/** Daily quota as a bar plus "used x% · resets in …" (ccpl resets at 00:00
+ *  Beijing time). Amber from 80%, red once the limit is reached. */
+export function QuotaBar({ spent, limit }: { spent: number; limit: number }) {
+  const { t } = useTranslation();
+  const now = useMinuteClock();
+  const usage = quotaUsage(spent, limit);
+  const reset = untilQuotaReset(now);
+  return (
+    <div className="mt-1 flex w-full max-w-sm flex-col gap-1.5">
+      <div
+        role="progressbar"
+        aria-label={t("account.quotaBarLabel")}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={Math.min(100, usage.percent)}
+        className="h-1.5 w-full overflow-hidden rounded-full bg-background-tertiary-default"
+      >
+        <div
+          className={cx("h-full rounded-full transition-[width] duration-150 ease-out", TONE_FILL[usage.tone])}
+          style={{ width: `${usage.ratio * 100}%` }}
+        />
+      </div>
+      <div className="flex items-center justify-between gap-3 text-caption-1-regular">
+        <span className={usage.tone === "normal" ? "text-text-secondary" : usage.tone === "warning" ? "text-text-warning-primary" : "text-text-error-primary"}>
+          {usage.tone === "exceeded"
+            ? t("account.quotaExceeded", { spent: money(spent), limit: money(limit) })
+            : t("account.quotaUsed", { percent: usage.percent, spent: money(spent), limit: money(limit) })}
+        </span>
+        <span className="shrink-0 text-text-tertiary">
+          {reset.hours > 0
+            ? t("account.quotaResetsIn", { hours: reset.hours, minutes: reset.minutes })
+            : t("account.quotaResetsInMinutes", { minutes: reset.minutes })}
+        </span>
+      </div>
     </div>
   );
 }

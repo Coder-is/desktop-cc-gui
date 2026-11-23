@@ -18,7 +18,7 @@ vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async () => () => {}) })
 
 import i18n from "@/lib/i18n";
 import { AccountMenu, ACCOUNT_SETTINGS_PATH } from "./AccountMenu";
-import { AccountUsagePanel } from "./AccountProfile";
+import { AccountUsagePanel, QuotaBar } from "./AccountProfile";
 import { useAccountStore } from "./account-store";
 import { localDay } from "./account-usage";
 
@@ -168,5 +168,23 @@ describe("AccountUsagePanel", () => {
     accountUsageQuery.mockRejectedValue(JSON.stringify({ status: 401, message: "" }));
     await act(async () => root.render(<AccountUsagePanel />));
     expect(container.querySelector('[role="alert"]')).not.toBeNull();
+  });
+});
+
+describe("QuotaBar", () => {
+  it("shows the share used, the amounts and the reset countdown", async () => {
+    await act(async () => root.render(<QuotaBar spent={4.5} limit={5} />));
+    const bar = container.querySelector('[role="progressbar"]')!;
+    expect(bar.getAttribute("aria-valuenow")).toBe("90");
+    expect(container.textContent).toContain(i18n.t("account.quotaUsed", { percent: 90, spent: "$4.50", limit: "$5.00" }));
+    expect(bar.firstElementChild!.className).toContain("bg-text-warning-primary");
+  });
+
+  it("says the quota is used up and caps the bar at 100%", async () => {
+    await act(async () => root.render(<QuotaBar spent={7} limit={5} />));
+    const bar = container.querySelector('[role="progressbar"]')!;
+    expect(bar.getAttribute("aria-valuenow")).toBe("100");
+    expect((bar.firstElementChild as HTMLElement).style.width).toBe("100%");
+    expect(container.textContent).toContain(i18n.t("account.quotaExceeded", { spent: "$7.00", limit: "$5.00" }));
   });
 });

@@ -6,6 +6,8 @@ import {
   heatmapWeeks,
   initials,
   monthLabels,
+  quotaUsage,
+  untilQuotaReset,
   summarize,
   weeklyTotals,
 } from "./account-usage";
@@ -123,5 +125,23 @@ describe("initials", () => {
     expect(initials("li ming")).toBe("LM");
     expect(initials("张三")).toBe("张三");
     expect(initials("  ")).toBe("");
+  });
+});
+
+describe("quota reset and usage", () => {
+  it("counts down to the next 00:00 Beijing time", () => {
+    // 2026-11-22 15:00 UTC = 23:00 Beijing → 1 hour left.
+    expect(untilQuotaReset(new Date(Date.UTC(2026, 10, 22, 15, 0)))).toEqual({ hours: 1, minutes: 0 });
+    // 16:00 UTC is Beijing midnight exactly → a full day ahead.
+    expect(untilQuotaReset(new Date(Date.UTC(2026, 10, 22, 16, 0)))).toEqual({ hours: 24, minutes: 0 });
+    // 15:59:30 UTC → rounds up to one minute, never "0 minutes".
+    expect(untilQuotaReset(new Date(Date.UTC(2026, 10, 22, 15, 59, 30)))).toEqual({ hours: 0, minutes: 1 });
+  });
+
+  it("turns amber from 80% and red at the limit; the bar never overflows", () => {
+    expect(quotaUsage(1, 5)).toEqual({ ratio: 0.2, percent: 20, tone: "normal" });
+    expect(quotaUsage(4, 5).tone).toBe("warning");
+    expect(quotaUsage(6, 5)).toEqual({ ratio: 1, percent: 120, tone: "exceeded" });
+    expect(quotaUsage(1, 0)).toEqual({ ratio: 0, percent: 0, tone: "normal" });
   });
 });

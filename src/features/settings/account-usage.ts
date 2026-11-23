@@ -200,3 +200,26 @@ export function initials(name: string): string {
   if (words.length >= 2) return (Array.from(words[0])[0] + Array.from(words[1])[0]).toUpperCase();
   return Array.from(trimmed).slice(0, 2).join("").toUpperCase();
 }
+
+/** ccpl daily quotas reset at 00:00 Beijing time (UTC+8, no DST). */
+const BEIJING_OFFSET_MS = 8 * 3_600_000;
+const DAY_MS = 86_400_000;
+
+/** Time left until the next 00:00 Beijing time, rounded up to the minute. */
+export function untilQuotaReset(now: Date): { hours: number; minutes: number } {
+  const shifted = now.getTime() + BEIJING_OFFSET_MS;
+  const next = (Math.floor(shifted / DAY_MS) + 1) * DAY_MS;
+  const minutes = Math.max(1, Math.ceil((next - shifted) / 60_000));
+  return { hours: Math.floor(minutes / 60), minutes: minutes % 60 };
+}
+
+export type QuotaTone = "normal" | "warning" | "exceeded";
+
+/** Share of the daily limit used: `ratio` is clamped for the bar width,
+ *  `percent` is the honest figure (may pass 100). */
+export function quotaUsage(spent: number, limit: number): { ratio: number; percent: number; tone: QuotaTone } {
+  if (!(limit > 0)) return { ratio: 0, percent: 0, tone: "normal" };
+  const raw = Math.max(0, spent) / limit;
+  const tone: QuotaTone = raw >= 1 ? "exceeded" : raw >= 0.8 ? "warning" : "normal";
+  return { ratio: Math.min(1, raw), percent: Math.round(raw * 100), tone };
+}
