@@ -1,11 +1,11 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
-const upsertProvider = vi.fn(async () => {});
-const setCurrentProvider = vi.fn(async () => {});
+const upsertProvider = vi.fn(async (..._args: unknown[]) => {});
+const setCurrentProvider = vi.fn(async (..._args: unknown[]) => {});
 vi.mock("@/lib/ipc", () => ({
   ipc: {
-    upsertProvider: (...args: unknown[]) => upsertProvider(...(args as [])),
-    setCurrentProvider: (...args: unknown[]) => setCurrentProvider(...(args as [])),
+    upsertProvider: (...args: unknown[]) => upsertProvider(...args),
+    setCurrentProvider: (...args: unknown[]) => setCurrentProvider(...args),
   },
 }));
 
