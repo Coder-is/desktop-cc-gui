@@ -1,0 +1,100 @@
+name: Build macOS artifact
+
+# Internal-testing macOS build: unsigned by Apple (ad-hoc codesign only), not
+# notarized, no updater artifacts, no release. A full Tauri build costs
+# 20–40 min of runner time per architecture — run it manually when a test
+# build is actually needed. Signed / notarized builds go through release.yml.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-macos:
+    name: macos (${{ matrix.arch }})
+    runs-on: ${{ matrix.platform }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-latest
+            arch: aarch64
+          - platform: macos-15-intel
+            arch: x86_64
+    env:
+      MACOSX_DEPLOYMENT_TARGET: "10.13"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.29.3
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+          cache-bin: false
+          shared-key: v1-macos-artifact-${{ matrix.arch }}-rust
+          cache-on-failure: true
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # tauri.conf.json pins the upstream maintainer's Developer ID, which is
+      # not in this runner's keychain, and createUpdaterArtifacts needs the
+      # updater signing key. Override both for this build only: "-" asks
+      # codesign for an ad-hoc signature — required, because Apple Silicon
+      # refuses to launch completely unsigned arm64 binaries.
+      - name: Write internal-build config override
+        run: |
+          cat > "$RUNNER_TEMP/tauri.macos-internal.conf.json" <<'EOF'
+          {
+            "bundle": {
+              "createUpdaterArtifacts": false,
+              "macOS": { "signingIdentity": "-" }
+            }
+          }
+          EOF
+
+      # bundle_dmg.sh (AppleScript/Finder + hdiutil) is known-flaky on headless
+      # runners; retry like release.yml (the second attempt is incremental).
+      - name: Build app and DMG (ad-hoc signed)
+        env:
+          NODE_OPTIONS: "--max-old-space-size=8192"
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            if pnpm exec tauri build --config "$RUNNER_TEMP/tauri.macos-internal.conf.json" --bundles app,dmg; then
+              exit 0
+            fi
+            echo "::warning::tauri build attempt $attempt failed; retrying"
+          done
+          echo "::error::tauri build failed after 3 attempts"
+          exit 1
+
+      # The app must carry its computer-use helper and a valid (ad-hoc)
+      # signature, or the DMG installs something that cannot launch.
+      - name: Check bundle
+        run: |
+          set -euo pipefail
+          APP=$(find src-tauri/target/release/bundle/macos -maxdepth 1 -name '*.app' | head -n 1)
+          test -n "$APP"
+          find "$APP/Contents/MacOS" -maxdepth 1 -name 'ccgui-computer-use*' | grep -q . \
+            || { echo "::error::$APP does not contain ccgui-computer-use"; exit 1; }
+          codesign --verify --deep --strict --verbose=2 "$APP"
+          test -n "$(find src-tauri/target/release/bundle/dmg -maxdepth 1 -name '*.dmg')"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ccgui-macos-${{ matrix.arch }}
+          path: src-tauri/target/release/bundle/dmg/*.dmg
+          if-no-files-found: error
