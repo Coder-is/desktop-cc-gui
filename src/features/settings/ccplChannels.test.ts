@@ -2,14 +2,18 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 
 const upsertProvider = vi.fn(async (..._args: unknown[]) => {});
 const setCurrentProvider = vi.fn(async (..._args: unknown[]) => {});
+const deleteProvider = vi.fn(async (..._args: unknown[]) => {});
+const getCliConfig = vi.fn(async () => ({}) as Record<string, unknown>);
 vi.mock("@/lib/ipc", () => ({
   ipc: {
     upsertProvider: (...args: unknown[]) => upsertProvider(...args),
     setCurrentProvider: (...args: unknown[]) => setCurrentProvider(...args),
+    deleteProvider: (...args: unknown[]) => deleteProvider(...args),
+    getCliConfig: () => getCliConfig(),
   },
 }));
 
-import { applyCcplChannels, buildCcplChannels, CCPL_CHANNEL_ID } from "./ccplChannels";
+import { applyCcplChannels, buildCcplChannels, ccplEnginesFor, CCPL_CHANNEL_ID } from "./ccplChannels";
 import { parseCcplError, usd } from "./CcplAccountSection";
 
 describe("buildCcplChannels", () => {
@@ -42,10 +46,49 @@ describe("applyCcplChannels", () => {
   beforeEach(() => {
     upsertProvider.mockClear();
     setCurrentProvider.mockClear();
+    deleteProvider.mockClear();
+    getCliConfig.mockReset().mockResolvedValue({});
   });
 
-  it("upserts one fixed-id channel per engine and activates when asked", async () => {
+  it("maps each group type to the one engine it serves", () => {
+    expect(ccplEnginesFor("anthropic")).toEqual(["claude"]);
+    expect(ccplEnginesFor("codex")).toEqual(["codex"]);
+    expect(ccplEnginesFor("grok")).toEqual(["grok"]);
+    expect(ccplEnginesFor("antigravity")).toEqual([]);
+    expect(ccplEnginesFor("")).toEqual(["claude", "codex", "grok"]);
+  });
+
+  it("writes only the engine of a known group", async () => {
+    const result = await applyCcplChannels("https://cc.example.com", "sk-ccpl-x", "bob", true, "codex");
+    expect(upsertProvider.mock.calls.map((c) => [c[0], c[1]])).toEqual([["codex", CCPL_CHANNEL_ID]]);
+    expect(setCurrentProvider.mock.calls).toEqual([["codex", CCPL_CHANNEL_ID]]);
+    expect(result).toEqual({ written: ["codex"], removed: [] });
+  });
+
+  it("removes other engines' ccpl channels only when they carry the same token", async () => {
+    getCliConfig.mockResolvedValue({
+      claude: { providers: { [CCPL_CHANNEL_ID]: { apiKey: "sk-ccpl-x" } }, current: CCPL_CHANNEL_ID },
+      grok: { providers: { [CCPL_CHANNEL_ID]: { apiKey: "sk-ccpl-other" } }, current: null },
+    });
+    const result = await applyCcplChannels("https://cc.example.com", "sk-ccpl-x", "bob", false, "codex");
+    expect(deleteProvider.mock.calls).toEqual([["claude", CCPL_CHANNEL_ID]]);
+    expect(result).toEqual({ written: ["codex"], removed: ["claude"] });
+  });
+
+  it("writes nothing for a Gemini group but still clears its unusable leftovers", async () => {
+    getCliConfig.mockResolvedValue({
+      codex: { providers: { [CCPL_CHANNEL_ID]: { apiKey: "sk-ccpl-g" } }, current: null },
+    });
+    const result = await applyCcplChannels("https://cc.example.com", "sk-ccpl-g", "bob", true, "antigravity");
+    expect(upsertProvider).not.toHaveBeenCalled();
+    expect(setCurrentProvider).not.toHaveBeenCalled();
+    expect(result).toEqual({ written: [], removed: ["codex"] });
+  });
+
+  it("upserts one fixed-id channel per engine and activates when the group is unknown", async () => {
     await applyCcplChannels("https://cc.example.com", "sk-ccpl-x", "bob", true);
+    expect(getCliConfig).not.toHaveBeenCalled();
+    expect(deleteProvider).not.toHaveBeenCalled();
     expect(upsertProvider.mock.calls.map((c) => [c[0], c[1]])).toEqual([
       ["claude", CCPL_CHANNEL_ID],
       ["codex", CCPL_CHANNEL_ID],

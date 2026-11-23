@@ -1480,6 +1480,7 @@ export const ipc = {
   ccplCaptcha: (baseUrl: string) => invoke<CcplCaptcha>("ccpl_captcha", { baseUrl }),
   ccplRegister: (form: CcplCredentials) => invoke<CcplSession>("ccpl_register", { form }),
   ccplLogin: (form: CcplCredentials) => invoke<CcplSession>("ccpl_login", { form }),
+  ccplTokenLogin: (form: CcplTokenForm) => invoke<CcplSession>("ccpl_token_login", { form }),
   ccplMe: (range: "24h" | "7d" | "30d") => invoke<CcplMe>("ccpl_me", { range }),
   ccplLogout: () => invoke<void>("ccpl_logout"),
   // settings
@@ -2203,7 +2204,13 @@ export interface CcplAccountStatus {
   baseUrl: string;
   username: string;
   tokenHint: string;
+  /** Group type the channels were written for at sign-in; "" = not detected. */
+  provider: CcplProvider | "";
 }
+
+/** A ccpl token belongs to exactly one group; its type decides which engine
+ *  the token works with. */
+export type CcplProvider = "anthropic" | "codex" | "grok" | "antigravity";
 
 export interface CcplServerInfo {
   registration: boolean;
@@ -2225,13 +2232,22 @@ export interface CcplCredentials {
   captchaCode?: string;
 }
 
+/** Sign in with an existing `sk-…` token (e.g. one issued on the ccpl web
+ *  console); the backend checks it against `GET /v1/me` before saving. */
+export interface CcplTokenForm {
+  baseUrl: string;
+  token: string;
+}
+
 /** Login / register result. `token` is handed over once so the page can write
- *  it into the ccpl channels of Claude / Codex / Grok. */
+ *  it into the ccpl channel of the engine its group serves. */
 export interface CcplSession {
   baseUrl: string;
   username: string;
   token: string;
   quotaPending: boolean;
+  /** From the server's `provider` field, else `/v1/models` owners; "" = unknown. */
+  provider: CcplProvider | "";
 }
 
 export interface CcplStatRow {
@@ -2260,4 +2276,6 @@ export interface CcplMe {
   range: string;
   usage: { total: CcplStatRow; models: CcplStatRow[]; days: CcplStatRow[] };
   announcement?: { text: string; level: string };
+  /** Current group type; absent on ccpl servers older than this field. */
+  provider?: CcplProvider;
 }
