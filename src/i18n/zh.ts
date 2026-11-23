@@ -2625,6 +2625,7 @@ export const zh = {
     range_all: "全部",
     usageLine: "{{tokens}} Token · {{requests}} 次 · {{cost}}",
     noUsage: "这个时间段没有用量记录。",
+    loading: "正在读取用量…",
     scanning: "正在汇总本机 CLI 日志，完成后自动刷新…",
     localNote: "统计来自本机各 CLI 自己的会话日志，只在本地计算；费用按公开价格表估算。",
     refreshUsage: "刷新统计",

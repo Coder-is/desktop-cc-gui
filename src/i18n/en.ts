@@ -2695,6 +2695,7 @@ export const en: Messages = {
     range_all: "All",
     usageLine: "{{tokens}} tokens · {{requests}} req · {{cost}}",
     noUsage: "No usage in this period.",
+    loading: "Loading usage…",
     scanning: "Summarizing local CLI logs; this refreshes when done…",
     localNote: "From each CLI's own session logs on this machine, computed locally; costs are estimates from a public price table.",
     refreshUsage: "Refresh stats",

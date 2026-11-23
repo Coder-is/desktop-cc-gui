@@ -125,6 +125,45 @@ describe("AccountUsagePanel", () => {
     expect(text.indexOf("claude-opus-5-5")).toBeLessThan(text.indexOf("gpt-6.2"));
   });
 
+  it("shows placeholders, not zeros, until the first answer lands", async () => {
+    let answer!: (value: unknown) => void;
+    accountUsageQuery.mockReturnValue(new Promise((resolve) => (answer = resolve)));
+    await act(async () => root.render(<AccountUsagePanel />));
+    const stats = () => [...container.querySelectorAll(".grid > div > span:first-child")].map((el) => el.textContent);
+    expect(stats()).toEqual(["—", "—", "—", "—", "—", "—"]);
+    expect(container.textContent).toContain(i18n.t("account.loading"));
+    expect(container.textContent).not.toContain(i18n.t("account.noUsage"));
+
+    const today = localDay(new Date());
+    await act(async () =>
+      answer({
+        rows: [{ bucket: today, engine: "claude", model: "m", project: null, sessions: 1, requests: 1, input: 1200, output: 0, cacheRead: 0, cacheWrite: 0, reasoning: 0, cost: null }],
+        firstDay: today,
+        scannedAt: Date.now(),
+        scanning: false,
+        unknownModels: [],
+      }),
+    );
+    expect(stats()[0]).not.toBe("—");
+    expect(stats()[1]).toBe("—"); // unknown price stays unknown
+  });
+
+  it("keeps placeholders while the first scan fills an empty index", async () => {
+    accountUsageQuery.mockResolvedValue({ rows: [], firstDay: null, scannedAt: null, scanning: true, unknownModels: [] });
+    await act(async () => root.render(<AccountUsagePanel />));
+    const stats = [...container.querySelectorAll(".grid > div > span:first-child")].map((el) => el.textContent);
+    expect(stats).toEqual(["—", "—", "—", "—", "—", "—"]);
+    expect(container.textContent).toContain(i18n.t("account.scanning"));
+  });
+
+  it("shows real zeros once a finished scan found no usage", async () => {
+    accountUsageQuery.mockResolvedValue({ rows: [], firstDay: null, scannedAt: Date.now(), scanning: false, unknownModels: [] });
+    await act(async () => root.render(<AccountUsagePanel />));
+    const stats = [...container.querySelectorAll(".grid > div > span:first-child")].map((el) => el.textContent);
+    expect(stats[0]).toBe("0");
+    expect(container.textContent).toContain(i18n.t("account.noUsage"));
+  });
+
   it("reports a refused query (signed out) instead of showing numbers", async () => {
     accountUsageQuery.mockRejectedValue(JSON.stringify({ status: 401, message: "" }));
     await act(async () => root.render(<AccountUsagePanel />));

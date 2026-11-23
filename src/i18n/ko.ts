@@ -2537,6 +2537,7 @@ export const ko: Messages = {
     range_all: "전체",
     usageLine: "토큰 {{tokens}} · {{requests}}회 · {{cost}}",
     noUsage: "이 기간에는 사용 기록이 없습니다.",
+    loading: "사용량을 불러오는 중…",
     scanning: "이 기기의 CLI 로그를 집계하는 중입니다. 완료되면 자동으로 새로 고칩니다…",
     localNote: "이 기기에 있는 각 CLI의 세션 로그로 로컬에서 계산합니다. 비용은 공개 가격표 기준 추정치입니다.",
     refreshUsage: "통계 새로 고침",

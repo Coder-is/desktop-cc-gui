@@ -26,6 +26,9 @@ const HISTORY_DAYS = 3650;
 type Breakdown = "today" | "7d" | "30d" | "all";
 type HeatMode = "day" | "week";
 
+/** Shown in place of a number that is not known yet. */
+const PLACEHOLDER = "—";
+
 /** Opacity per heat level over the primary color; level 0 uses the muted surface. */
 const LEVEL_OPACITY = [0, 0.3, 0.5, 0.75, 1] as const;
 
@@ -159,6 +162,12 @@ export function AccountUsagePanel() {
   }, [load]);
 
   const rows = data?.rows ?? [];
+  // Numbers are only known once a query answered with an index to read: before
+  // the first answer, or while the very first scan is still filling an empty
+  // index, a "0" would read as "never used" — show a placeholder instead.
+  const firstScan = !!data?.scanning && rows.length === 0;
+  const known = data !== null && !firstScan;
+  const shown = (value: string) => (known ? value : PLACEHOLDER);
   const summary = useMemo(() => summarize(rows, today), [rows, today]);
   const grid = useMemo(() => heatmapWeeks(summary.daily, today), [summary.daily, today]);
   const weeks = useMemo(() => weeklyTotals(grid), [grid]);
@@ -171,12 +180,12 @@ export function AccountUsagePanel() {
   return (
     <div className="flex w-full flex-col gap-5">
       <div className="grid grid-cols-3 divide-x divide-border-secondary rounded-2xl border border-border-secondary sm:grid-cols-6">
-        <Stat value={compact(summary.todayTokens)} label={t("account.todayTokens")} />
-        <Stat value={money(summary.todayCost)} label={t("account.todayCost")} />
-        <Stat value={compact(summary.totalTokens)} label={t("account.totalTokens")} />
-        <Stat value={summary.peak ? compact(summary.peak.tokens) : "—"} label={t("account.peakTokens")} />
-        <Stat value={t("account.days", { count: summary.longestStreak })} label={t("account.longestStreak")} />
-        <Stat value={t("account.days", { count: summary.currentStreak })} label={t("account.currentStreak")} />
+        <Stat value={shown(compact(summary.todayTokens))} label={t("account.todayTokens")} />
+        <Stat value={shown(money(summary.todayCost))} label={t("account.todayCost")} />
+        <Stat value={shown(compact(summary.totalTokens))} label={t("account.totalTokens")} />
+        <Stat value={shown(summary.peak ? compact(summary.peak.tokens) : PLACEHOLDER)} label={t("account.peakTokens")} />
+        <Stat value={shown(t("account.days", { count: summary.longestStreak }))} label={t("account.longestStreak")} />
+        <Stat value={shown(t("account.days", { count: summary.currentStreak }))} label={t("account.currentStreak")} />
       </div>
 
       <div className="flex flex-col gap-2">
@@ -242,7 +251,7 @@ export function AccountUsagePanel() {
         </div>
         {engines.length === 0 ? (
           <p className="rounded-2xl border border-border-secondary px-4 py-6 text-center text-body-2-regular text-text-tertiary">
-            {data?.scanning || loading ? t("account.scanning") : t("account.noUsage")}
+            {data === null ? (loading ? t("account.loading") : PLACEHOLDER) : data.scanning ? t("account.scanning") : t("account.noUsage")}
           </p>
         ) : (
           <div className="flex flex-col rounded-2xl border border-border-secondary">
