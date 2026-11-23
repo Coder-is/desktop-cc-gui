@@ -1904,6 +1904,9 @@ export const ipc = {
     ),
   readFile: (path: string, encoding?: "utf-8" | "gbk") =>
     withGrantRetry(() => invoke<FileContent>("read_file", { path, encoding: encoding ?? null })),
+  /** Data URL of a tool/engine-produced raster image (read-only; workspace
+   *  roots plus each engine's image-output dir, e.g. Codex generated_images). */
+  readToolImage: (path: string) => invoke<string>("read_tool_image", { path }),
   writeFile: (
     path: string,
     content: string,

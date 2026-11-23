@@ -235,7 +235,7 @@ pub(crate) fn canonicalize_lenient(path: &Path) -> Result<PathBuf, String> {
 /// Workspace roots, user-granted directories and the pasted-images sandbox
 /// are the only trees the file commands may touch: `path` comes over IPC and
 /// would otherwise be an arbitrary-filesystem primitive.
-fn allowed_roots(db: &crate::db::Db) -> Vec<PathBuf> {
+pub(crate) fn allowed_roots(db: &crate::db::Db) -> Vec<PathBuf> {
     let mut roots: Vec<PathBuf> = db
         .workspace_paths()
         .unwrap_or_default()

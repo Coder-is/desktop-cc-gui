@@ -1078,10 +1078,46 @@ fn extract_codex_line(value: &Value, images: ImageMode) -> LineRows {
                     }];
                 }
             }
+            if let Some(row) = codex_image_generation_row(payload, ts) {
+                return vec![row];
+            }
             Vec::new()
         }
         _ => Vec::new(),
     }
+}
+
+/// Codex records a finished picture as `event_msg / item_completed` with an
+/// `Extension` item of kind `image_gen.generation` (savedPath + the whole
+/// image as base64). Rebuild the same `image_generation` tool row the live
+/// app-server mapping produces (codex_app.rs) — path, not the multi-MB
+/// base64, so reopening a session still shows the picture.
+fn codex_image_generation_row(payload: &Value, ts: Option<String>) -> Option<LineRow> {
+    if payload.get("type").and_then(Value::as_str) != Some("item_completed") {
+        return None;
+    }
+    let item = payload.get("item")?;
+    if item.get("type").and_then(Value::as_str) != Some("Extension")
+        || item.get("kind").and_then(Value::as_str) != Some("image_gen.generation")
+    {
+        return None;
+    }
+    let pick = |keys: &[&str]| {
+        let mut out = serde_json::Map::new();
+        for key in keys {
+            if let Some(field) = item.get(*key).filter(|field| !field.is_null()) {
+                out.insert((*key).to_string(), field.clone());
+            }
+        }
+        out
+    };
+    let args = pick(&["revisedPrompt"]);
+    Some(LineRow {
+        args: (!args.is_empty()).then(|| Value::Object(args)),
+        result: Some(Value::Object(pick(&["status", "savedPath", "failure"]))),
+        tool_call_id: item.get("id").and_then(Value::as_str).map(str::to_string),
+        ..LineRow::new("tool", "image_generation".to_string(), ts)
+    })
 }
 
 /// Flush buffered assistant text ahead of a toolCall/thinking part so the
@@ -3550,6 +3586,54 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].text, "see this");
         assert_eq!(rows[0].images, ["data:image/png;base64,aGk="]);
+    }
+
+    /// Real codex-cli 0.171 rollout shape for a generated picture: the tool
+    /// row keeps savedPath and drops the multi-MB base64 `result`.
+    #[test]
+    fn codex_generated_image_becomes_an_image_generation_tool_row() {
+        let line: Value = serde_json::json!({
+            "timestamp": "2026-11-23T07:25:05.533Z",
+            "type": "event_msg",
+            "payload": {
+                "type": "item_completed",
+                "thread_id": "t1",
+                "turn_id": "u1",
+                "item": {
+                    "type": "Extension",
+                    "kind": "image_gen.generation",
+                    "id": "exec-dea0",
+                    "status": "completed",
+                    "revisedPrompt": "a ginger kitten by the window",
+                    "result": "iVBORw0KGgoAAAANSUhEUgAA",
+                    "transparentBackground": false,
+                    "failure": null,
+                    "savedPath": "C:\\Users\\me\\.codex\\generated_images\\t1\\exec-dea0.png"
+                }
+            }
+        });
+        let rows = extract_codex_line(&line, ImageMode::Collect);
+        assert_eq!(rows.len(), 1);
+        let row = &rows[0];
+        assert_eq!((row.role.as_str(), row.text.as_str()), ("tool", "image_generation"));
+        assert_eq!(row.tool_call_id.as_deref(), Some("exec-dea0"));
+        assert_eq!(row.args, Some(serde_json::json!({"revisedPrompt": "a ginger kitten by the window"})));
+        assert_eq!(
+            row.result,
+            Some(serde_json::json!({
+                "status": "completed",
+                "savedPath": "C:\\Users\\me\\.codex\\generated_images\\t1\\exec-dea0.png"
+            }))
+        );
+    }
+
+    #[test]
+    fn other_codex_item_completed_events_stay_out_of_the_timeline() {
+        let line: Value = serde_json::json!({
+            "type": "event_msg",
+            "payload": {"type": "item_completed", "item": {"type": "Extension", "kind": "other.kind"}}
+        });
+        assert!(extract_codex_line(&line, ImageMode::Collect).is_empty());
     }
 
     /// Real CLI v2.175.0 transcript schema: message lines with input_text /

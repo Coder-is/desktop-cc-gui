@@ -48,6 +48,7 @@ pub mod slash_commands;
 pub mod terminal;
 pub mod translate;
 pub mod updater;
+pub mod tool_images;
 pub mod usage_limits;
 pub mod usage_stats;
 pub mod web;
@@ -557,6 +558,7 @@ pub fn run() {
             // files
             files::list_dir,
             files::read_file,
+            tool_images::read_tool_image,
             // HTML preview roots (desktop only; same boundary as read_file)
             preview_protocol::preview_open,
             files::write_file,

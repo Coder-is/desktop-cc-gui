@@ -10,6 +10,8 @@ import { getFileTreeIconSvg } from "@/features/files/fileIcons";
 import { useChatFileOpener, type ChatFileOpener } from "@/features/chat/open-chat-file";
 import { markToolKeys, toolEntranceKey, type ProcessItem } from "./timeline-rows";
 import { ToolPayloadViewer } from "./ToolPayloadViewer";
+import { ToolImages } from "./ToolImages";
+import { isImageGenerationTool, toolImages } from "./tool-images";
 import { useLiveReveal } from "./use-live-reveal";
 import { useRevealed } from "./reveal-text";
 import { createVisibleTextReader } from "./stream-reveal";
@@ -551,6 +553,17 @@ export const ProcessDisclosure = memo(function ProcessDisclosure({
   // "思考过程" title itself, and the expanded body drops the inner repeat.
   const singleThinking = items.length === 1 && items[0].type === "thinking";
   const label = processSummaryLabel(t, singleThinking, thinkingCount, toolCount);
+  // Pictures from image-generating tools (Codex image_generation, MCP image
+  // tools, …) are the answer itself: show them under the header even while
+  // the run is folded. Other tools' images stay inside the expanded call.
+  const generatedImages = useMemo(() => {
+    const refs: string[] = [];
+    for (const item of items) {
+      if (item.type !== "tool" || !isImageGenerationTool(item.text)) continue;
+      for (const ref of toolImages(item.result)) if (!refs.includes(ref)) refs.push(ref);
+    }
+    return refs;
+  }, [items]);
   // A folded row does not keep live thinking mounted (or revealing) behind
   // the clipped grid: expanding is the user's explicit request, and a fresh
   // mount publishes everything already received.
@@ -612,6 +625,7 @@ export const ProcessDisclosure = memo(function ProcessDisclosure({
           ) : null}
         </div>
       </div>
+      {generatedImages.length > 0 && <ToolImages images={generatedImages} />}
     </div>
   );
 });

@@ -15,6 +15,8 @@ import {
   type DiffLine,
   type EditArgs,
 } from "./edit-line-stats";
+import { ToolImages } from "./ToolImages";
+import { redactImageData, toolImages } from "./tool-images";
 
 export interface ToolPayloadViewerProps {
   toolName: string;
@@ -422,9 +424,14 @@ export const GenericToolViewer = memo(function GenericToolViewer({
     }
   }, [args]);
 
-  const formattedResult = useMemo(() => formatExecutionResult(result), [result]);
+  const images = useMemo(() => toolImages(result), [result]);
+  // Inline base64 would print as megabytes of text; the thumbnails show it.
+  const formattedResult = useMemo(
+    () => formatExecutionResult(images.length > 0 ? redactImageData(result) : result),
+    [result, images],
+  );
 
-  if (!formattedArgs && !formattedResult) return null;
+  if (!formattedArgs && !formattedResult && images.length === 0) return null;
 
   return (
     <div className="mt-1.5 overflow-hidden rounded-md border border-border-secondary bg-background-secondary-default text-[11px] font-mono leading-[1.5]">
@@ -449,6 +456,7 @@ export const GenericToolViewer = memo(function GenericToolViewer({
             <CornerDownRight className="size-3" aria-hidden />
             <span>{t("chat.toolResult")}</span>
           </button>
+          {showResult && images.length > 0 && <ToolImages images={images} size="sm" />}
           {showResult && (
             <BoundedPre
               text={formattedResult.text}

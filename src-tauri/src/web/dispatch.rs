@@ -1137,6 +1137,10 @@ pub(super) async fn dispatch(
             let a: PathArgs = parse_args(&raw)?;
             ser(crate::files::read_file(app.state(), a.path, a.encoding).await)
         }
+        "read_tool_image" => {
+            let a: PathArgs = parse_args(&raw)?;
+            ser(crate::tool_images::read_tool_image(app.state(), a.path).await)
+        }
         "write_file" => {
             let a: WriteFileArgs = parse_args(&raw)?;
             ser(
