@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
+import KeyRound from "lucide-react/dist/esm/icons/key-round";
 import LogIn from "lucide-react/dist/esm/icons/log-in";
 import LogOut from "lucide-react/dist/esm/icons/log-out";
 import RefreshCw from "lucide-react/dist/esm/icons/refresh-cw";
@@ -17,14 +18,28 @@ import {
   type CcplAccountStatus,
   type CcplCaptcha,
   type CcplMe,
+  type CcplProvider,
   type CcplServerInfo,
   type CcplSession,
 } from "@/lib/ipc";
 import { CCPL_BASE_URL } from "./providerPresets";
-import { applyCcplChannels } from "./ccplChannels";
+import { applyCcplChannels, type CcplEngine } from "./ccplChannels";
 
-type Mode = "login" | "register";
+type Mode = "login" | "register" | "token";
 type Range = "24h" | "7d" | "30d";
+
+/** Brand-literal engine names, as in CLI_DISPLAY_NAMES. */
+const ENGINE_NAMES: Record<CcplEngine, string> = { claude: "Claude", codex: "Codex", grok: "Grok" };
+const GROUP_NAMES: Record<CcplProvider, string> = {
+  anthropic: "Claude",
+  codex: "Codex",
+  grok: "Grok",
+  antigravity: "Gemini (Antigravity)",
+};
+
+function engineList(engines: CcplEngine[]): string {
+  return engines.map((engine) => ENGINE_NAMES[engine]).join(" / ");
+}
 
 interface CcplError {
   status?: number;
@@ -53,7 +68,8 @@ export function usd(nano: number): string {
 
 /**
  * 设置 → ccpl 账号: sign in to (or register on) a self-hosted ccpl pool,
- * write the account token into the ccpl channels of Claude / Codex / Grok,
+ * write the account token into the ccpl channel of the engine its group
+ * serves (Claude / Codex / Grok),
  * and show the account's daily quota and usage. Registration starts with no
  * quota; the ccpl admin grants a daily limit before the token can be used.
  * Network calls only run on page open and on the user's clicks.
@@ -65,6 +81,8 @@ export function CcplAccountSection() {
   const [mode, setMode] = useState<Mode>("login");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  // Token mode: an `sk-…` key issued elsewhere (e.g. the ccpl web console).
+  const [token, setToken] = useState("");
   const [inviteCode, setInviteCode] = useState("");
   const [server, setServer] = useState<CcplServerInfo | null>(null);
   const [captcha, setCaptcha] = useState<CcplCaptcha | null>(null);
@@ -81,6 +99,8 @@ export function CcplAccountSection() {
       const err = parseCcplError(e);
       if (err.message === "invalid_url") return t("ccplAccount.invalidUrl");
       if (err.message === "insecure_url") return t("ccplAccount.insecureUrl");
+      if (err.message === "invalid_token") return t("ccplAccount.invalidToken");
+      if (err.message === "not_ccpl_api") return t("ccplAccount.notCcplApi");
       if (err.network) return t("ccplAccount.networkError", { detail: err.network });
       if (err.status === 401 && !err.message) return t("ccplAccount.signedOut");
       return err.message || t("ccplAccount.unknownError");
@@ -147,7 +167,7 @@ export function CcplAccountSection() {
     try {
       const info = await ipc.ccplServerInfo(baseUrl);
       setServer(info);
-      if (info.registration) await refreshCaptcha();
+      if (info?.registration) await refreshCaptcha();
     } catch (e) {
       setServer(null);
       setError(errorText(e));
@@ -157,21 +177,69 @@ export function CcplAccountSection() {
   };
 
   const finish = async (session: CcplSession) => {
+    const notices: string[] = [];
     try {
-      await applyCcplChannels(session.baseUrl, session.token, session.username, activate);
+      const result = await applyCcplChannels(
+        session.baseUrl,
+        session.token,
+        session.username,
+        activate,
+        session.provider,
+      );
+      notices.push(
+        result.written.length > 0
+          ? t("ccplAccount.signedInOk", { engines: engineList(result.written) })
+          : t("ccplAccount.signedInNoEngine", {
+              group: session.provider ? GROUP_NAMES[session.provider] : "",
+            }),
+      );
+      if (result.removed.length > 0) {
+        notices.push(t("ccplAccount.removedStale", { engines: engineList(result.removed) }));
+      }
     } catch (e) {
       setError(t("ccplAccount.applyFailed", { detail: String(e) }));
+      notices.push(t("ccplAccount.signedIn"));
     }
+    if (session.quotaPending) notices.push(t("ccplAccount.quotaPendingNote"));
     setPassword("");
+    setToken("");
     setCaptcha(null);
     setCaptchaCode("");
     setStatus(await ipc.ccplAccountStatus());
-    setNotice(session.quotaPending ? t("ccplAccount.signedInPending") : t("ccplAccount.signedInOk"));
+    setNotice(notices.join(" "));
     await loadMe(range);
+  };
+
+  const submitToken = async () => {
+    if (!token.trim()) {
+      setError(t("ccplAccount.fillToken"));
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const session = await ipc.ccplTokenLogin({ baseUrl, token: token.trim() });
+      setBusy(false);
+      await finish(session);
+    } catch (e) {
+      setBusy(false);
+      // 401/403 from /v1/me: the server does not accept this key (wrong, revoked or expired).
+      const err = parseCcplError(e);
+      setError(
+        err.status === 401 || err.status === 403
+          ? t("ccplAccount.tokenRejected", { detail: err.message || err.status })
+          : errorText(e),
+      );
+    }
   };
 
   const submit = async () => {
     if (busy) return;
+    if (mode === "token") {
+      await submitToken();
+      return;
+    }
     if (!username.trim() || !password) {
       setError(t("ccplAccount.fillAll"));
       return;
@@ -213,7 +281,7 @@ export function CcplAccountSection() {
   const logout = async () => {
     try {
       await ipc.ccplLogout();
-      setStatus({ signedIn: false, baseUrl: "", username: "", tokenHint: "" });
+      setStatus({ signedIn: false, baseUrl: "", username: "", tokenHint: "", provider: "" });
       setMe(null);
       setNotice(t("ccplAccount.loggedOut"));
     } catch (e) {
@@ -227,6 +295,11 @@ export function CcplAccountSection() {
   };
 
   const signedIn = !!status?.signedIn;
+  // The server's current group type (newer ccpl) wins over the one recorded at
+  // sign-in; a difference means an admin moved the token and the channels
+  // written back then no longer match.
+  const currentGroup: CcplProvider | "" = me?.provider ?? status?.provider ?? "";
+  const groupChanged = !!me?.provider && !!status?.provider && me.provider !== status.provider;
   const total = me?.usage?.total;
   const limitText =
     me && me.dailyLimit > 0 ? `${usd(me.dailySpent * 1e9)} / ${usd(me.dailyLimit * 1e9)}` : null;
@@ -248,6 +321,29 @@ export function CcplAccountSection() {
               <SettingsRow anchor="ccplServer" label={t("ccplAccount.server")}>
                 <span className="font-mono text-body-2-regular text-text-secondary">{status?.baseUrl}</span>
               </SettingsRow>
+              {currentGroup && (
+                <SettingsRow
+                  anchor="ccplGroup"
+                  label={t("ccplAccount.group")}
+                  description={
+                    groupChanged
+                      ? t("ccplAccount.groupChanged", { group: GROUP_NAMES[currentGroup] })
+                      : currentGroup === "antigravity"
+                        ? t("ccplAccount.groupNoEngine")
+                        : t("ccplAccount.groupDesc")
+                  }
+                >
+                  <span
+                    className={
+                      groupChanged
+                        ? "text-body-2-regular text-text-error-primary"
+                        : "text-body-2-regular text-text-primary"
+                    }
+                  >
+                    {GROUP_NAMES[currentGroup]}
+                  </span>
+                </SettingsRow>
+              )}
               <SettingsRow
                 anchor="ccplQuota"
                 label={t("ccplAccount.dailyQuota")}
@@ -337,6 +433,9 @@ export function CcplAccountSection() {
               <Button size="xs" variant={mode === "register" ? "primary" : "ghost"} disabled={busy} onClick={() => void switchMode("register")}>
                 {t("ccplAccount.register")}
               </Button>
+              <Button size="xs" variant={mode === "token" ? "primary" : "ghost"} disabled={busy} onClick={() => void switchMode("token")}>
+                {t("ccplAccount.tokenLogin")}
+              </Button>
             </div>
             <SettingsCard>
               <SettingsRow anchor="ccplServerUrl" label={t("ccplAccount.server")} description={t("ccplAccount.serverDesc")}>
@@ -353,7 +452,25 @@ export function CcplAccountSection() {
                   }}
                 />
               </SettingsRow>
-              {mode === "register" && server && !server.registration ? (
+              {mode === "token" ? (
+                <>
+                  <SettingsRow anchor="ccplToken" label={t("ccplAccount.token")} description={t("ccplAccount.tokenDesc")}>
+                    <Input
+                      aria-label={t("ccplAccount.token")}
+                      size="small"
+                      className="w-72"
+                      type="password"
+                      value={token}
+                      placeholder="sk-ccpl-…"
+                      autoComplete="off"
+                      onChange={setToken}
+                    />
+                  </SettingsRow>
+                  <SettingsRow anchor="ccplActivate" label={t("ccplAccount.activate")} description={t("ccplAccount.activateDesc")}>
+                    <Switch size="sm" aria-label={t("ccplAccount.activate")} isSelected={activate} onChange={setActivate} />
+                  </SettingsRow>
+                </>
+              ) : mode === "register" && server && !server.registration ? (
                 <SettingsRow anchor="ccplClosed" label={t("ccplAccount.register")}>
                   <span className="text-body-2-regular text-text-secondary">{t("ccplAccount.registrationClosed")}</span>
                 </SettingsRow>
@@ -414,11 +531,15 @@ export function CcplAccountSection() {
             <div className="flex items-center gap-3 px-3 pt-2">
               <Button
                 size="small"
-                leadingIcon={mode === "register" ? UserPlus : LogIn}
+                leadingIcon={mode === "register" ? UserPlus : mode === "token" ? KeyRound : LogIn}
                 disabled={busy || (mode === "register" && (!server || !server.registration))}
                 onClick={() => void submit()}
               >
-                {mode === "register" ? t("ccplAccount.registerSubmit") : t("ccplAccount.loginSubmit")}
+                {mode === "register"
+                  ? t("ccplAccount.registerSubmit")
+                  : mode === "token"
+                    ? t("ccplAccount.tokenSubmit")
+                    : t("ccplAccount.loginSubmit")}
               </Button>
             </div>
             {mode === "register" && <p className="px-3 text-body-2-regular text-text-tertiary">{t("ccplAccount.registerHint")}</p>}

@@ -420,6 +420,7 @@ pub fn run() {
             ccpl_account::ccpl_captcha,
             ccpl_account::ccpl_register,
             ccpl_account::ccpl_login,
+            ccpl_account::ccpl_token_login,
             ccpl_account::ccpl_me,
             ccpl_account::ccpl_logout,
             // settings
