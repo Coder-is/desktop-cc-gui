@@ -24,6 +24,7 @@ vi.mock("@/lib/ipc", () => ({
     resolveEnabledBuiltInAgent: vi.fn(),
     rememberSessionModel: vi.fn(async () => {}),
     rememberSessionEffort: vi.fn(async () => {}),
+    rememberSessionProvider: vi.fn(async () => {}),
     listWorkspaces: vi.fn(async () => []),
     listEngines: vi.fn(async () => []),
     listSessions: vi.fn(async () => []),
@@ -794,6 +795,64 @@ describe("model selection is per session", () => {
 
     expect(vi.mocked(ipc.sendMessage)).toHaveBeenCalledWith(
       expect.objectContaining({ effort: "low" }),
+    );
+  });
+});
+
+describe("channel follows the engine unless the session picked one", () => {
+  beforeEach(() => {
+    resetStore();
+    vi.mocked(ipc.rememberSessionProvider).mockClear();
+  });
+
+  const sess = { engine: "claude", sessionId: "s-a", workspacePath: WS };
+
+  // 以前没选过渠道的会话会把当时的引擎默认（引擎还没有渠道时是「官方配置」）记成自己的，
+  // 之后登录 ccpl、切了当前渠道也不跟着变，本机没登录就报 "Not logged in"。
+  it("a session that never picked a channel follows the engine's current channel", async () => {
+    useChatStore.setState({
+      activeEngine: "claude",
+      openTabs: [sess],
+      active: sess,
+      providers: { claude: "__local_settings_json__" },
+      bySession: { "claude/s-a": { ...EMPTY_SESSION } },
+    });
+
+    await useChatStore.getState().send("hi", []);
+
+    expect(vi.mocked(ipc.sendMessage)).toHaveBeenCalledWith(
+      expect.objectContaining({ providerId: null }),
+    );
+    expect(ipc.rememberSessionProvider).not.toHaveBeenCalled();
+    expect(useChatStore.getState().bySession["claude/s-a"]?.activeProvider ?? null).toBeNull();
+  });
+
+  it("a channel the session picked stays pinned", async () => {
+    useChatStore.setState({
+      activeEngine: "claude",
+      openTabs: [sess],
+      active: sess,
+      providers: { claude: "ccpl-account" },
+      bySession: { "claude/s-a": { ...EMPTY_SESSION, activeProvider: "my-channel" } },
+    });
+
+    await useChatStore.getState().send("hi", []);
+
+    expect(vi.mocked(ipc.sendMessage)).toHaveBeenCalledWith(
+      expect.objectContaining({ providerId: "my-channel" }),
+    );
+    expect(ipc.rememberSessionProvider).toHaveBeenCalledWith("claude", "s-a", "my-channel");
+  });
+
+  it("a new chat whose channel was picked on its tab carries it", async () => {
+    useChatStore.setState({ activeEngine: "claude", openTabs: [], active: null, providers: { claude: "ccpl-account" } });
+    useChatStore.getState().startNewChat(WS);
+    useChatStore.setState((s) => ({ active: s.active ? { ...s.active, provider: "picked" } : s.active }));
+
+    await useChatStore.getState().send("hi", []);
+
+    expect(vi.mocked(ipc.sendMessage)).toHaveBeenCalledWith(
+      expect.objectContaining({ providerId: "picked" }),
     );
   });
 });

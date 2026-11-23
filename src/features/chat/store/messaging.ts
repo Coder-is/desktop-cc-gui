@@ -284,12 +284,11 @@ export function createMessagingActions(
         rememberEffortForRun(key, effort);
       }
     }
+    // 只有会话自己选过的渠道（输入框的渠道选择器）才固定下来。没选过的会话每次发送都跟随引擎的当前渠道：
+    // 以前把当时的引擎默认值也记成了这个会话的渠道，引擎还没有渠道时记成「官方配置」，之后用户登录 ccpl、
+    // 切了当前渠道，这些会话照样走官方配置，本机没登录就报 "Not logged in"。providerId 传 null 时由后端取当前渠道。
     const provider =
-      resolveSessionProvider(
-        tab,
-        get().bySession[key],
-        get().providers[engine],
-      ) ?? null;
+      resolveSessionProvider(tab, get().bySession[key]) ?? null;
     if (provider) {
       if (tab.sessionId) {
         void ipc

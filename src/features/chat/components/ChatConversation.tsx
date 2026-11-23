@@ -26,6 +26,7 @@ import { useComposerActions } from "./use-composer-actions";
 import { filterEngineOptions, orderEngineOptions } from "./engine-options";
 import { useCliNavOrder } from "@/lib/cli-nav-order";
 import { ErrorBanner } from "./ErrorBanner";
+import { PinnedChannelNotice } from "./PinnedChannelNotice";
 import { useBranchSwitcher } from "./use-branch-switcher";
 import { useComposerImages } from "./use-composer-images";
 import { useEngineModels } from "./use-engine-models";
@@ -110,6 +111,7 @@ function ConversationBody({
   }
   return (
     <>
+      <PinnedChannelNotice engine={active.engine} sessionId={active.sessionId} workspacePath={active.workspacePath} />
       {sessionError && (
         <ErrorBanner className="mx-4 mt-3" message={sessionError} onDismiss={onDismissError} />
       )}
