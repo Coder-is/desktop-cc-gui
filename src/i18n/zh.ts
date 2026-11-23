@@ -2631,6 +2631,8 @@ export const zh = {
     refreshUsage: "刷新统计",
     usageFailed: "读取用量统计失败：{{detail}}",
     serverSection: "服务器与额度",
+    serverStatus: "额度信息",
+    serverNoQuota: "这个服务器暂未提供额度与用量接口（/v1/me），需要升级 ccpl。上面的本机统计不受影响。",
   },
 };
 

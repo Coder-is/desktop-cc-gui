@@ -7,6 +7,7 @@ const ccplTokenLogin = vi.fn();
 const ccplMe = vi.fn();
 const ccplServerInfo = vi.fn();
 const ccplCaptcha = vi.fn();
+const accountUsageQuery = vi.fn();
 vi.mock("@/lib/ipc", () => ({
   ipc: {
     ccplAccountStatus: () => ccplAccountStatus(),
@@ -14,8 +15,10 @@ vi.mock("@/lib/ipc", () => ({
     ccplMe: (range: unknown) => ccplMe(range),
     ccplServerInfo: (baseUrl: unknown) => ccplServerInfo(baseUrl),
     ccplCaptcha: (baseUrl: unknown) => ccplCaptcha(baseUrl),
+    accountUsageQuery: (query: unknown) => accountUsageQuery(query),
   },
 }));
+vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async () => () => {}) }));
 const applyCcplChannels = vi.fn(async (..._args: unknown[]) => ({ written: ["claude"], removed: [] as string[] }));
 vi.mock("./ccplChannels", () => ({
   applyCcplChannels: (...args: unknown[]) => applyCcplChannels(...args),
@@ -41,6 +44,7 @@ beforeEach(() => {
   ccplMe.mockReset().mockResolvedValue(null);
   ccplServerInfo.mockReset();
   ccplCaptcha.mockReset();
+  accountUsageQuery.mockReset().mockResolvedValue({ rows: [], firstDay: null, scannedAt: Date.now(), scanning: false, unknownModels: [] });
   applyCcplChannels.mockClear();
   container = document.createElement("div");
   document.body.appendChild(container);
@@ -166,5 +170,34 @@ describe("CcplAccountSection register on a server without the account API", () =
     expect(ccplCaptcha).not.toHaveBeenCalled();
     expect(container.querySelector('[role="alert"]')?.textContent).toBe(i18n.t("ccplAccount.notCcplApi"));
     expect(button(i18n.t("ccplAccount.registerSubmit")).disabled).toBe(true);
+  });
+});
+
+describe("CcplAccountSection signed in on a server without /v1/me", () => {
+  it("keeps the failure inside the server card and still shows local usage", async () => {
+    ccplAccountStatus.mockResolvedValue({ signedIn: true, baseUrl: "https://cc.example.com", username: "alice", tokenHint: "sk-…abcd", provider: "" });
+    ccplMe.mockRejectedValue(JSON.stringify({ status: 404, message: "not_ccpl_api" }));
+    await act(async () => root.render(<CcplAccountSection />));
+
+    expect(container.querySelector('[role="alert"]')).toBeNull();
+    expect(container.querySelector('[role="status"]')?.textContent).toBe(i18n.t("account.serverNoQuota"));
+    // Local usage panel rendered and queried; quota range buttons hidden without data.
+    expect(accountUsageQuery).toHaveBeenCalledTimes(1);
+    expect(container.textContent).toContain(i18n.t("account.todayTokens"));
+    expect(container.textContent).not.toContain(i18n.t("ccplAccount.range24h"));
+  });
+
+  it("clears the server note once a refresh succeeds", async () => {
+    ccplAccountStatus.mockResolvedValue({ signedIn: true, baseUrl: "https://cc.example.com", username: "alice", tokenHint: "sk-…abcd", provider: "" });
+    ccplMe.mockRejectedValueOnce(JSON.stringify({ status: 0, message: "", network: "timed out" }));
+    await act(async () => root.render(<CcplAccountSection />));
+    expect(container.querySelector('[role="status"]')?.textContent).toBe(
+      i18n.t("ccplAccount.networkError", { detail: "timed out" }),
+    );
+
+    ccplMe.mockResolvedValue({ hint: "sk-…", quotaPending: false, dailyLimit: 5, dailySpent: 1, models: [], restricted: false, range: "24h", usage: { total: null, models: [], days: [] } });
+    await act(async () => button(i18n.t("ccplAccount.refresh")).click());
+    expect(container.querySelector('[role="status"]')).toBeNull();
+    expect(container.textContent).toContain(i18n.t("ccplAccount.range24h"));
   });
 });

@@ -92,6 +92,10 @@ export function CcplAccountSection() {
   const [activate, setActivate] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Failure of the quota / usage query (`/v1/me`) only: shown inside the
+  // server card, so a server without the account API does not paint the whole
+  // page as broken while the local usage panel above works fine.
+  const [meError, setMeError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [me, setMe] = useState<CcplMe | null>(null);
   const [range, setRange] = useState<Range>("24h");
@@ -122,16 +126,19 @@ export function CcplAccountSection() {
   const loadMe = useCallback(
     async (nextRange: Range) => {
       setBusy(true);
-      setError(null);
+      setMeError(null);
       try {
         setMe(await ipc.ccplMe(nextRange));
       } catch (e) {
-        setError(errorText(e));
+        setMe(null);
+        setMeError(
+          parseCcplError(e).message === "not_ccpl_api" ? t("account.serverNoQuota") : errorText(e),
+        );
       } finally {
         setBusy(false);
       }
     },
-    [errorText],
+    [errorText, t],
   );
 
   useEffect(() => {
@@ -335,6 +342,13 @@ export function CcplAccountSection() {
               <SettingsRow anchor="ccplServer" label={t("ccplAccount.server")}>
                 <span className="font-mono text-body-2-regular text-text-secondary">{status?.baseUrl}</span>
               </SettingsRow>
+              {meError && (
+                <SettingsRow anchor="ccplServerStatus" label={t("account.serverStatus")}>
+                  <span role="status" className="text-right text-body-2-regular text-text-tertiary">
+                    {meError}
+                  </span>
+                </SettingsRow>
+              )}
               {currentGroup && (
                 <SettingsRow
                   anchor="ccplGroup"
@@ -384,7 +398,7 @@ export function CcplAccountSection() {
                   </span>
                 </SettingsRow>
               )}
-              <SettingsRow anchor="ccplUsage" label={t("ccplAccount.usage")}>
+              {me && <SettingsRow anchor="ccplUsage" label={t("ccplAccount.usage")}>
                 <div className="flex items-center gap-2">
                   {(["24h", "7d", "30d"] as const).map((r) => (
                     <Button
@@ -398,7 +412,7 @@ export function CcplAccountSection() {
                     </Button>
                   ))}
                 </div>
-              </SettingsRow>
+              </SettingsRow>}
               {total && (
                 <SettingsRow anchor="ccplUsageTotal" label={t("ccplAccount.usageTotal")}>
                   <span className="font-mono text-body-2-regular text-text-primary">

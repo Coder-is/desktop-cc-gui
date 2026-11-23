@@ -2543,5 +2543,7 @@ export const ko: Messages = {
     refreshUsage: "통계 새로 고침",
     usageFailed: "사용량 통계를 읽지 못했습니다: {{detail}}",
     serverSection: "서버 및 한도",
+    serverStatus: "한도 정보",
+    serverNoQuota: "이 서버에는 아직 한도·사용량 API(/v1/me)가 없습니다. ccpl 업그레이드가 필요합니다. 위의 로컬 통계는 영향을 받지 않습니다.",
   },
 };

@@ -2701,5 +2701,7 @@ export const en: Messages = {
     refreshUsage: "Refresh stats",
     usageFailed: "Couldn't read usage stats: {{detail}}",
     serverSection: "Server & quota",
+    serverStatus: "Quota info",
+    serverNoQuota: "This server has no quota / usage API (/v1/me) yet; ccpl needs an upgrade. The local stats above are unaffected.",
   },
 };
