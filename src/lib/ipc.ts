@@ -1483,6 +1483,9 @@ export const ipc = {
   ccplTokenLogin: (form: CcplTokenForm) => invoke<CcplSession>("ccpl_token_login", { form }),
   ccplMe: (range: "24h" | "7d" | "30d") => invoke<CcplMe>("ccpl_me", { range }),
   ccplLogout: () => invoke<void>("ccpl_logout"),
+  /** 设置 → 账号 usage by CLI × model (local CLI logs); refused while signed out. */
+  accountUsageQuery: (query: AccountUsageQuery) =>
+    invoke<AccountUsageResponse>("account_usage_query", { query }),
   // settings
   getAppSettings: fetchAppSettings,
   /** De-cached read: settings the backend changed on its own (the pairing key
@@ -2197,6 +2200,42 @@ export const ipc = {
 };
 
 // ── ccpl account ────────────────────────────────────────────────────────────
+
+/** `account_usage_query` request: local `YYYY-MM-DD` days, inclusive. */
+export interface AccountUsageQuery {
+  from: string;
+  to: string;
+  bucket?: "day" | "hour";
+  /** Minutes east of UTC (480 for UTC+8). */
+  tzOffsetMinutes: number;
+}
+
+/** One local day × CLI × model × project group (src-tauri usage_stats). */
+export interface AccountUsageRow {
+  bucket: string;
+  engine: string;
+  model: string;
+  project?: string | null;
+  sessions: number;
+  requests: number;
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  reasoning: number;
+  /** Estimated USD; null when the model has no known price. */
+  cost?: number | null;
+}
+
+export interface AccountUsageResponse {
+  rows: AccountUsageRow[];
+  /** First local day with any recorded usage. */
+  firstDay?: string | null;
+  scannedAt?: number | null;
+  /** An incremental scan of the CLI logs is still running. */
+  scanning: boolean;
+  unknownModels: string[];
+}
 
 /** Saved ccpl account; the token itself never leaves the backend here. */
 export interface CcplAccountStatus {

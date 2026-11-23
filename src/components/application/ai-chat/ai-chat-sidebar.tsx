@@ -1,6 +1,6 @@
 "use client";
 
-import type { Ref } from "react";
+import type { ReactNode, Ref } from "react";
 import { useCallback, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
@@ -61,6 +61,7 @@ export function AiChatSidebar({
   onDropWorkspaceToSection,
   onCreateGroup,
   onOpenSettings,
+  accountMenu,
   onClose,
   flat = false,
 }: {
@@ -109,6 +110,8 @@ export function AiChatSidebar({
   /** 任务工作台入口（原生中心页签；替换原「自动化」占位项）。 */
   onOpenMission?: () => void;
   onOpenSettings?: () => void;
+  /** Replaces the footer's 设置 row (sidebar account menu). */
+  accountMenu?: ReactNode;
   onClose?: () => void;
   flat?: boolean;
 } = {}) {
@@ -217,7 +220,7 @@ export function AiChatSidebar({
         </div>
       </div>
 
-      <SidebarFooter onOpenSettings={onOpenSettings} />
+      <SidebarFooter onOpenSettings={onOpenSettings} accountMenu={accountMenu} />
 
       <SessionSearchPalette
         open={searchOpen}

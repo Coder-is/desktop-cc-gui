@@ -81,6 +81,15 @@ pub async fn query(req: QueryRequest) -> Result<QueryResponse, String> {
     Ok(response)
 }
 
+/// `query` for a host page the user opened (设置 → 账号). Remembers the app
+/// handle so the stale-refresh scan `query` may start emits `CHANGED_EVENT`
+/// when it lands, but does NOT start the plugin background loop: the page
+/// asks again on its own refresh, nothing keeps walking the logs after it.
+pub async fn query_for_page(app: &AppHandle, req: QueryRequest) -> Result<QueryResponse, String> {
+    remember_app(app);
+    query(req).await
+}
+
 /// Each source's roots, file count and readability (readdir only).
 pub async fn sources() -> Result<Vec<SourceStatus>, String> {
     let db = db_path();

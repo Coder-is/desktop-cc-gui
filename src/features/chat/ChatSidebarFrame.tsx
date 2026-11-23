@@ -7,6 +7,7 @@ import {
   type ThreadAction,
 } from "@/components/application/ai-chat/ai-chat-sidebar";
 import { cx } from "@/utils/cx";
+import { AccountMenu } from "@/features/settings/AccountMenu";
 import { sessionKey, type ActiveSession } from "./store";
 
 /** Left edge: the session sidebar, its full-height resize strip, and the
@@ -124,6 +125,7 @@ export function ChatSidebarFrame({
         onDropWorkspaceToSection={onDropWorkspaceToSection}
         onCreateGroup={onCreateGroup}
         onOpenSettings={() => navigate("/settings")}
+        accountMenu={<AccountMenu onNavigate={navigate} />}
         onClose={onClose}
       />
       {/* Sidebar resize strip: full height, straddling the border. */}

@@ -382,6 +382,20 @@ pub fn ccpl_logout() -> Result<(), String> {
     }
 }
 
+/// 账号页的用量统计（按 CLI × 模型），数据来自本机各 CLI 自己的会话日志
+/// （usage_stats，只读、只在本地）。产品决定：没登录账号就不给看，所以这里先查登录态。
+/// 只在用户打开 / 刷新账号页时调用，不启动插件那套后台定时扫描。
+#[tauri::command]
+pub async fn account_usage_query(
+    app: tauri::AppHandle,
+    query: crate::usage_stats::QueryRequest,
+) -> Result<crate::usage_stats::QueryResponse, String> {
+    if read_account().is_none() {
+        return Err(error_text(401, &Value::Null));
+    }
+    crate::usage_stats::query_for_page(&app, query).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -23,6 +23,8 @@ import {
   type CcplSession,
 } from "@/lib/ipc";
 import { CCPL_BASE_URL } from "./providerPresets";
+import { AccountProfileHeader, AccountUsagePanel } from "./AccountProfile";
+import { useAccountStore } from "./account-store";
 import { applyCcplChannels, type CcplEngine } from "./ccplChannels";
 
 type Mode = "login" | "register" | "token";
@@ -93,6 +95,15 @@ export function CcplAccountSection() {
   const [notice, setNotice] = useState<string | null>(null);
   const [me, setMe] = useState<CcplMe | null>(null);
   const [range, setRange] = useState<Range>("24h");
+
+  // Mirror into the shared store so the sidebar avatar menu follows sign-in,
+  // sign-out and the last fetched quota without asking the server itself.
+  useEffect(() => {
+    if (status) useAccountStore.getState().setStatus(status);
+  }, [status]);
+  useEffect(() => {
+    useAccountStore.getState().setMe(me);
+  }, [me]);
 
   const errorText = useCallback(
     (e: unknown): string => {
@@ -312,6 +323,9 @@ export function CcplAccountSection() {
 
         {signedIn ? (
           <>
+            {status && <AccountProfileHeader status={status} me={me} />}
+            <AccountUsagePanel />
+            <SettingsSectionLabel>{t("account.serverSection")}</SettingsSectionLabel>
             <SettingsCard>
               <SettingsRow anchor="ccplUser" label={t("ccplAccount.account")}>
                 <span className="text-body-2-regular text-text-primary">

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, type ComponentType } from "react";
+import { useEffect, useRef, useState, type ComponentType, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import Globe from "lucide-react/dist/esm/icons/globe";
 import LayoutGrid from "lucide-react/dist/esm/icons/layout-grid";
@@ -260,15 +260,22 @@ export function SidebarPrimaryNav({
 
 /** Secondary nav (设置) with the floating web-remote badge. The badge is
  *  floating, not laid out: it covers the empty half of the row (设置 keeps
- *  its full width and hover) and lets clicks through. */
-export function SidebarFooter({ onOpenSettings }: { onOpenSettings?: () => void }) {
+ *  its full width and hover) and lets clicks through. An `accountMenu`
+ *  slot replaces the 设置 row (the account menu carries 设置 itself). */
+export function SidebarFooter({
+  onOpenSettings,
+  accountMenu,
+}: {
+  onOpenSettings?: () => void;
+  accountMenu?: ReactNode;
+}) {
   const { t } = useTranslation();
   const remoteActive = useRemoteControl();
   return (
     <div className="flex w-full shrink-0 flex-col gap-3 px-3 pb-3">
       <div className="relative flex w-full items-center">
         <nav className="flex w-full flex-col gap-1">
-          <NavItem icon={Settings} label={t("settings.title")} onClick={onOpenSettings} />
+          {accountMenu ?? <NavItem icon={Settings} label={t("settings.title")} onClick={onOpenSettings} />}
         </nav>
         {remoteActive && (
           <div

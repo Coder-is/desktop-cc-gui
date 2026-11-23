@@ -423,6 +423,7 @@ pub fn run() {
             ccpl_account::ccpl_token_login,
             ccpl_account::ccpl_me,
             ccpl_account::ccpl_logout,
+            ccpl_account::account_usage_query,
             // settings
             settings::get_app_settings,
             settings::update_app_settings,
