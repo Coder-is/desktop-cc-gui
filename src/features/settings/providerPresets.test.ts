@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   CCPL_BASE_URL,
+  CLAUDE_MODEL_ENV_KEYS,
   PRESETS,
   buildCodexConfigToml,
   claudeTemplateJson,
@@ -37,20 +38,19 @@ describe("API Route preset configuration", () => {
 describe("ccpl preset configuration", () => {
   it("points Claude Code at the ccpl root so /v1/messages lands on the pool", () => {
     const preset = PRESETS.claude!.find((p) => p.name === "ccpl")!;
-    const settings = JSON.parse(claudeTemplateJson(preset.baseUrl, "ccpl-token", preset.env));
+    const settings = JSON.parse(
+      claudeTemplateJson(preset.baseUrl, "ccpl-token", preset.env, { nativeModels: preset.nativeModels }),
+    );
     expect(new URL("/v1/messages", settings.env.ANTHROPIC_BASE_URL).href).toBe(
       `${CCPL_BASE_URL}/v1/messages`,
     );
     expect(settings.env.ANTHROPIC_AUTH_TOKEN).toBe("ccpl-token");
-    // ccpl only serves Claude models on the Claude group; no third-party tier names.
-    for (const slot of ["HAIKU", "SONNET", "OPUS"]) {
-      expect(settings.env[`ANTHROPIC_DEFAULT_${slot}_MODEL`]).toMatch(/^claude-/);
-    }
-    // 5.5 一代：4.5 不接受模板带的 1M 上下文 beta，「选 Opus」会被上游 400。
-    expect(settings.env.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe("claude-opus-5-5");
-    expect(settings.env.ANTHROPIC_DEFAULT_SONNET_MODEL).toBe("claude-sonnet-5-5");
-    expect(settings.env.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBe("claude-haiku-5-5");
-    expect(settings.env.ANTHROPIC_SMALL_FAST_MODEL).toBe("claude-haiku-5-5");
+    // ccpl 是官方订阅号：渠道不映射模型，Claude Code 用自己的别名（列表显示什么就发什么）。
+    expect(preset.nativeModels).toBe(true);
+    for (const key of CLAUDE_MODEL_ENV_KEYS) expect(settings.env[key]).toBeUndefined();
+    expect(settings.model).toBeUndefined();
+    // 1M 上下文 beta 保留：5.5 三档实测可用。
+    expect(settings.env.ANTHROPIC_BETAS).toBe("context-1m-2025-08-07");
     expect(findMatchedPreset(PRESETS.claude!, settings.env.ANTHROPIC_BASE_URL)).toBe(preset);
   });
 

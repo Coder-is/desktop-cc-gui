@@ -1,3 +1,4 @@
+import { migrateCcplChannels } from "./ccplChannels";
 import { create } from "zustand";
 import { ipc, type CcplAccountStatus, type CcplMe } from "@/lib/ipc";
 
@@ -27,6 +28,8 @@ export const useAccountStore = create<AccountState>((set) => ({
     try {
       const status = await ipc.ccplAccountStatus();
       set((state) => ({ status, quota: status.signedIn ? state.quota : null }));
+      // 旧版本写进 ccpl 渠道的模型映射（列表显示 5.5、实际发 4.5）清掉，不用重新登录。
+      if (status.signedIn) void migrateCcplChannels();
     } catch {
       // Web access has no account commands: the menu falls back to 登录 / 设置.
       set({ status: null, quota: null });

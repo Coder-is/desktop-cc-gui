@@ -212,7 +212,7 @@ export function useProviderForm({
         ...v,
         name: preset.name,
         baseUrl: preset.baseUrl,
-        settingsJson: claudeTemplateJson(preset.baseUrl, v.apiKey.trim(), slotEnv),
+        settingsJson: claudeTemplateJson(preset.baseUrl, v.apiKey.trim(), slotEnv, { nativeModels: preset.nativeModels }),
       }));
       setJsonError("");
     } else if (isCodex) {

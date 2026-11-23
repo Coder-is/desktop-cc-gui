@@ -12,6 +12,7 @@
 import { ipc, type CcplProvider } from "@/lib/ipc";
 import { notifyCliConfigChanged } from "./providers";
 import {
+  CLAUDE_MODEL_ENV_KEYS,
   PRESETS,
   buildCodexConfigToml,
   claudeTemplateJson,
@@ -67,7 +68,9 @@ export function buildCcplChannels(
       remark,
       baseUrl: root,
       apiKey: token,
-      settingsConfig: JSON.parse(claudeTemplateJson(root, token, claudeEnv)) as unknown,
+      settingsConfig: JSON.parse(
+        claudeTemplateJson(root, token, claudeEnv, { nativeModels: ccplPreset("claude")?.nativeModels }),
+      ) as unknown,
     },
     codex: {
       name: "ccpl",
@@ -135,4 +138,75 @@ export async function applyCcplChannels(
     notifyCliConfigChanged();
   }
   return result;
+}
+
+/** Model ids earlier app versions wrote into the ccpl Claude channel: the
+ *  generic template's tier defaults, the old 4.5 ccpl preset and the short-lived
+ *  5.5 one. A value outside this set was typed by the user and is kept. */
+const LEGACY_CCPL_MODEL_IDS = new Set([
+  "claude-opus-5",
+  "claude-sonnet-4-6",
+  "claude-haiku-4-5-20251001",
+  "claude-opus-4-5",
+  "claude-sonnet-4-5",
+  "claude-haiku-4-5",
+  "claude-opus-5-5",
+  "claude-sonnet-5-5",
+  "claude-haiku-5-5",
+]);
+
+/** The ccpl Claude channel's settings without the model mapping earlier
+ *  versions wrote (see the preset's nativeModels): legacy tier/model env values
+ *  and the template's top-level `model: "opus"`. Values the user changed stay.
+ *  Returns null when there is nothing to strip. */
+export function withoutLegacyCcplModels(settings: unknown): Record<string, unknown> | null {
+  if (!settings || typeof settings !== "object") return null;
+  const next = { ...(settings as Record<string, unknown>) };
+  let changed = false;
+  if (next.model === "opus") {
+    delete next.model;
+    changed = true;
+  }
+  if (next.env && typeof next.env === "object") {
+    const env = { ...(next.env as Record<string, unknown>) };
+    for (const key of CLAUDE_MODEL_ENV_KEYS) {
+      const value = env[key];
+      if (typeof value === "string" && LEGACY_CCPL_MODEL_IDS.has(value)) {
+        delete env[key];
+        changed = true;
+      }
+    }
+    next.env = env;
+  }
+  return changed ? next : null;
+}
+
+let migrated = false;
+
+/** Once per app session: rewrite an existing ccpl Claude channel that still
+ *  carries a legacy model mapping, so a re-login is not needed to get the
+ *  CLI's own models. Token, endpoint and anything user-edited stay as they are. */
+export async function migrateCcplChannels(): Promise<boolean> {
+  if (migrated) return false;
+  migrated = true;
+  try {
+    const config = await ipc.getCliConfig();
+    const channel = config.claude?.providers?.[CCPL_CHANNEL_ID] as
+      | (Record<string, unknown> & { settingsConfig?: unknown })
+      | undefined;
+    const next = withoutLegacyCcplModels(channel?.settingsConfig);
+    if (!channel || !next) return false;
+    await ipc.upsertProvider("claude", CCPL_CHANNEL_ID, { ...channel, settingsConfig: next });
+    notifyCliConfigChanged();
+    return true;
+  } catch {
+    // Best effort: a failed read or write leaves the channel as it was.
+    migrated = false;
+    return false;
+  }
+}
+
+/** Test hook: allow another migration run. */
+export function resetCcplMigrationForTests() {
+  migrated = false;
 }

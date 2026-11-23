@@ -40,6 +40,12 @@ export interface ProviderPreset {
   /** claude: extra env merged into the JSON config on preset pick —
    *  ANTHROPIC_DEFAULT_<TIER>_MODEL slots plus per-provider tuning vars. */
   env?: Record<string, string>;
+  /** claude: the relay serves first-party Claude models under their own ids
+   *  (ccpl). The channel then carries no model mapping at all — no tier
+   *  ANTHROPIC_DEFAULT_*_MODEL, no ANTHROPIC_SMALL_FAST_MODEL, no top-level
+   *  `model` — so Claude Code resolves its own aliases: the picker's label is
+   *  what is sent, and a CLI upgrade brings new models without an app change. */
+  nativeModels?: boolean;
   /** codex: wire_api for the generated config.toml (default "chat" — the
    *  relays below are chat-completions compatible). */
   wireApi?: "responses" | "chat";
@@ -61,6 +67,16 @@ export const CLAUDE_MODEL_SLOTS = [
   { slot: "haiku", envKey: "ANTHROPIC_DEFAULT_HAIKU_MODEL" },
 ] as const;
 export type ClaudeModelSlot = (typeof CLAUDE_MODEL_SLOTS)[number]["slot"];
+
+/** Env keys that remap which model Claude Code sends (see nativeModels). */
+export const CLAUDE_MODEL_ENV_KEYS = [
+  "ANTHROPIC_MODEL",
+  "ANTHROPIC_DEFAULT_FABLE_MODEL",
+  "ANTHROPIC_DEFAULT_OPUS_MODEL",
+  "ANTHROPIC_DEFAULT_SONNET_MODEL",
+  "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+  "ANTHROPIC_SMALL_FAST_MODEL",
+] as const;
 
 /** The reference's default settings.json template for a new Claude channel. */
 export function buildDefaultClaudeSettings(): Record<string, unknown> & {
@@ -103,8 +119,13 @@ export function claudeTemplateJson(
   baseUrl: string,
   apiKey: string,
   extraEnv: Record<string, string> = {},
+  options: { nativeModels?: boolean } = {},
 ): string {
   const config = buildDefaultClaudeSettings();
+  if (options.nativeModels) {
+    delete (config as Record<string, unknown>).model;
+    for (const key of CLAUDE_MODEL_ENV_KEYS) delete config.env[key];
+  }
   config.env.ANTHROPIC_BASE_URL = baseUrl;
   config.env.ANTHROPIC_AUTH_TOKEN = apiKey;
   for (const [key, val] of Object.entries(extraEnv)) {
@@ -186,14 +207,10 @@ export const PRESETS: Partial<Record<EngineId, ProviderPreset[]>> = {
       baseUrl: CCPL_BASE_URL,
       model: "claude-sonnet-5-5",
       iconSrc: ccplIcon,
-      // ccpl 号池的订阅号已经是 5.5 一代。原来写的 4.5 让「选 Opus」实际发 claude-opus-4-5，
-      // 而 4.5 不接受模板里的 1M 上下文 beta（OAuth 认证下上游 400）；5.5 三档都实测带 1M beta 可用。
-      env: {
-        ANTHROPIC_DEFAULT_HAIKU_MODEL: "claude-haiku-5-5",
-        ANTHROPIC_DEFAULT_SONNET_MODEL: "claude-sonnet-5-5",
-        ANTHROPIC_DEFAULT_OPUS_MODEL: "claude-opus-5-5",
-        ANTHROPIC_SMALL_FAST_MODEL: "claude-haiku-5-5",
-      },
+      // ccpl 号池是官方订阅号，模型就用 Claude Code 自己的 id，渠道不做任何映射：以前写死 4.5 时，
+      // 列表显示「Opus 5.5」（CLI 内置表）实际却发 claude-opus-4-5，还撞上 1M beta 被上游 400。
+      // 不映射后列表显示什么就发什么，CLI 升级自带新模型。1M 上下文 beta 保留（5.5 三档实测可用）。
+      nativeModels: true,
     },
     {
       name: "API Route",
