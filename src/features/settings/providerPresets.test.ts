@@ -46,6 +46,11 @@ describe("ccpl preset configuration", () => {
     for (const slot of ["HAIKU", "SONNET", "OPUS"]) {
       expect(settings.env[`ANTHROPIC_DEFAULT_${slot}_MODEL`]).toMatch(/^claude-/);
     }
+    // 5.5 一代：4.5 不接受模板带的 1M 上下文 beta，「选 Opus」会被上游 400。
+    expect(settings.env.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe("claude-opus-5-5");
+    expect(settings.env.ANTHROPIC_DEFAULT_SONNET_MODEL).toBe("claude-sonnet-5-5");
+    expect(settings.env.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBe("claude-haiku-5-5");
+    expect(settings.env.ANTHROPIC_SMALL_FAST_MODEL).toBe("claude-haiku-5-5");
     expect(findMatchedPreset(PRESETS.claude!, settings.env.ANTHROPIC_BASE_URL)).toBe(preset);
   });
 

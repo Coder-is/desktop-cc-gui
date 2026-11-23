@@ -184,13 +184,15 @@ export const PRESETS: Partial<Record<EngineId, ProviderPreset[]>> = {
     {
       name: "ccpl",
       baseUrl: CCPL_BASE_URL,
-      model: "claude-sonnet-4-5",
+      model: "claude-sonnet-5-5",
       iconSrc: ccplIcon,
+      // ccpl 号池的订阅号已经是 5.5 一代。原来写的 4.5 让「选 Opus」实际发 claude-opus-4-5，
+      // 而 4.5 不接受模板里的 1M 上下文 beta（OAuth 认证下上游 400）；5.5 三档都实测带 1M beta 可用。
       env: {
-        ANTHROPIC_DEFAULT_HAIKU_MODEL: "claude-haiku-4-5",
-        ANTHROPIC_DEFAULT_SONNET_MODEL: "claude-sonnet-4-5",
-        ANTHROPIC_DEFAULT_OPUS_MODEL: "claude-opus-4-5",
-        ANTHROPIC_SMALL_FAST_MODEL: "claude-haiku-4-5",
+        ANTHROPIC_DEFAULT_HAIKU_MODEL: "claude-haiku-5-5",
+        ANTHROPIC_DEFAULT_SONNET_MODEL: "claude-sonnet-5-5",
+        ANTHROPIC_DEFAULT_OPUS_MODEL: "claude-opus-5-5",
+        ANTHROPIC_SMALL_FAST_MODEL: "claude-haiku-5-5",
       },
     },
     {
