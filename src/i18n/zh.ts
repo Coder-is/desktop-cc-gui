@@ -2638,6 +2638,15 @@ export const zh = {
     serverSection: "服务器与额度",
     serverStatus: "额度信息",
     serverNoQuota: "这个服务器暂未提供额度与用量接口（/v1/me），需要升级 ccpl。上面的本机统计不受影响。",
+    channels: "渠道",
+    channelsNone: "还没有写入 ccpl 渠道",
+    channelsNoneDesc: "重新登录会按令牌分组把 ccpl 渠道写入对应的 CLI。",
+    channelActive: "正在使用",
+    channelSwitchBack: "切回 ccpl",
+    channelOtherDesc: "当前使用「{{channel}}」，不走 ccpl。",
+    channelDisabled: "已停用",
+    channelDisabledDesc: "这个 CLI 在 设置 → CLI 里被停用了。",
+    switchFailed: "切换渠道失败：{{detail}}",
   },
 };
 

@@ -24,6 +24,7 @@ import {
 } from "@/lib/ipc";
 import { CCPL_BASE_URL } from "./providerPresets";
 import { AccountProfileHeader, AccountUsagePanel } from "./AccountProfile";
+import { AccountChannels } from "./AccountChannels";
 import { useAccountStore } from "./account-store";
 import { applyCcplChannels, type CcplEngine } from "./ccplChannels";
 
@@ -437,6 +438,7 @@ export function CcplAccountSection() {
                 </SettingsRow>
               ))}
             </SettingsCard>
+            <AccountChannels />
             {me?.announcement?.text && (
               <p className="px-3 text-body-2-regular text-text-secondary">{t("ccplAccount.announcement", { text: me.announcement.text })}</p>
             )}

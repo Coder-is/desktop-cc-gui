@@ -16,11 +16,13 @@ vi.mock("@/lib/ipc", () => ({
     ccplServerInfo: (baseUrl: unknown) => ccplServerInfo(baseUrl),
     ccplCaptcha: (baseUrl: unknown) => ccplCaptcha(baseUrl),
     accountUsageQuery: (query: unknown) => accountUsageQuery(query),
+    getCliConfig: () => Promise.resolve({}),
   },
 }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async () => () => {}) }));
 const applyCcplChannels = vi.fn(async (..._args: unknown[]) => ({ written: ["claude"], removed: [] as string[] }));
-vi.mock("./ccplChannels", () => ({
+vi.mock("./ccplChannels", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./ccplChannels")>()),
   applyCcplChannels: (...args: unknown[]) => applyCcplChannels(...args),
 }));
 
