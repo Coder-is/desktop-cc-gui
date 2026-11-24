@@ -69,6 +69,13 @@ describe("applyCcplChannels", () => {
     expect(ccplEnginesFor("")).toEqual(["claude", "codex", "grok"]);
   });
 
+  it("writes every engine of a token that has a Claude and a Codex group", async () => {
+    getCliConfig.mockResolvedValue({ grok: { providers: { [CCPL_CHANNEL_ID]: { apiKey: "sk-ccpl-both" } } } });
+    const result = await applyCcplChannels("https://cc.example.com", "sk-ccpl-both", "bob", true, ["anthropic", "codex"]);
+    expect(result).toEqual({ written: ["claude", "codex"], removed: ["grok"] });
+    expect(upsertProvider.mock.calls.map((c) => c[0])).toEqual(["claude", "codex"]);
+  });
+
   it("writes only the engine of a known group", async () => {
     const result = await applyCcplChannels("https://cc.example.com", "sk-ccpl-x", "bob", true, "codex");
     expect(upsertProvider.mock.calls.map((c) => [c[0], c[1]])).toEqual([["codex", CCPL_CHANNEL_ID]]);

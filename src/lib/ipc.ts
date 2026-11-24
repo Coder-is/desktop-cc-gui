@@ -2451,4 +2451,7 @@ export interface CcplMe {
   announcement?: { text: string; level: string };
   /** Current group type; absent on ccpl servers older than this field. */
   provider?: CcplProvider;
+  /** Every group type the token can use, main group first: Claude and Codex
+   *  when an admin also gave it a Codex group. Absent on older servers. */
+  providers?: CcplProvider[];
 }

@@ -23,6 +23,14 @@ export const CCPL_CHANNEL_ID = "ccpl-account";
 export const CCPL_ENGINES = ["claude", "codex", "grok"] as const;
 export type CcplEngine = (typeof CCPL_ENGINES)[number];
 
+/** Engines a token with these group types works with: a token can have a
+ *  Claude group plus a Codex group. No known type writes all, as before. */
+export function ccplEnginesForAll(providers: readonly (CcplProvider | "")[]): readonly CcplEngine[] {
+  const known = providers.filter((p): p is CcplProvider => !!p);
+  if (known.length === 0) return CCPL_ENGINES;
+  return CCPL_ENGINES.filter((engine) => known.some((p) => ccplEnginesFor(p).includes(engine)));
+}
+
 /** Engines a token of this group type works with. Antigravity (Gemini) groups
  *  have no engine here yet: ccpl only accepts chat-completions clients there
  *  and still degrades tool calls to text, which coding agents cannot use. */
@@ -110,10 +118,11 @@ export async function applyCcplChannels(
   token: string,
   username: string,
   activate: boolean,
-  provider: CcplProvider | "" = "",
+  provider: CcplProvider | "" | readonly CcplProvider[] = "",
 ): Promise<CcplApplyResult> {
   const channels = buildCcplChannels(baseUrl, token, username);
-  const targets = ccplEnginesFor(provider);
+  const providers: readonly (CcplProvider | "")[] = typeof provider === "string" ? [provider] : provider;
+  const targets = ccplEnginesForAll(providers);
   const result: CcplApplyResult = { written: [], removed: [] };
   try {
     for (const engine of targets) {
@@ -121,7 +130,7 @@ export async function applyCcplChannels(
       if (activate) await ipc.setCurrentProvider(engine, CCPL_CHANNEL_ID);
       result.written.push(engine);
     }
-    if (provider) {
+    if (providers.some(Boolean)) {
       const stale = CCPL_ENGINES.filter((engine) => !targets.includes(engine));
       if (stale.length > 0) {
         const config = await ipc.getCliConfig();

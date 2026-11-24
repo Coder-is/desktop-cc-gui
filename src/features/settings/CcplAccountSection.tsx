@@ -198,12 +198,16 @@ export function CcplAccountSection() {
   const finish = async (session: CcplSession) => {
     const notices: string[] = [];
     try {
+      // Newer ccpl lists every group type the token can use (e.g. Claude and
+      // Codex); write a channel for each. Older servers only have `provider`.
+      const me = await ipc.ccplMe(range).catch(() => null);
+      const providers = me?.providers?.length ? me.providers : session.provider;
       const result = await applyCcplChannels(
         session.baseUrl,
         session.token,
         session.username,
         activate,
-        session.provider,
+        providers,
       );
       notices.push(
         result.written.length > 0
