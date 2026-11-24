@@ -5,6 +5,7 @@ import {
   insertTextAtCaret,
   mentionToken,
   renderFileTags,
+  withoutMacFunctionKeys,
 } from "./file-tags";
 
 describe("mentionToken", () => {
@@ -112,5 +113,11 @@ describe("insertTextAtCaret", () => {
       command.restore();
       el.remove();
     }
+  });
+});
+
+describe("withoutMacFunctionKeys", () => {
+  it("只去掉 macOS 方向键这类私用区字符，连字符、中英文、emoji 都不动", () => {
+    expect(withoutMacFunctionKeys("a-b_c \uF702中文\uF703😀 #000000 \uF8FF")).toBe("a-b_c 中文😀 #000000 ");
   });
 });

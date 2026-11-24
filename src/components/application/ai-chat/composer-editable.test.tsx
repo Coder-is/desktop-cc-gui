@@ -290,3 +290,77 @@ describe("ComposerEditable 粘贴文件", () => {
     expect(props.onPastePaths).not.toHaveBeenCalled();
   });
 });
+
+// 百度输入法等在 macOS 的 WKWebView 里把方向键当文字送进来（← U+F702、→ U+F703），
+// 不处理就会插入看不见的字符（显示成方框、原样发给模型），光标也不动。
+describe("ComposerEditable macOS 方向键字符", () => {
+  let container: HTMLDivElement;
+  let root: Root;
+  let editable: HTMLDivElement;
+  let props: ComponentProps<typeof ComposerEditable>;
+
+  beforeEach(async () => {
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    root = createRoot(container);
+    props = makeProps();
+    await act(async () => root.render(<ComposerEditable {...props} />));
+    editable = props.editableRef.current!;
+  });
+
+  afterEach(async () => {
+    await act(async () => root.unmount());
+    container.remove();
+    vi.restoreAllMocks();
+  });
+
+  function caretAt(node: Node, offset: number) {
+    const range = document.createRange();
+    range.setStart(node, offset);
+    range.collapse(true);
+    const selection = window.getSelection()!;
+    selection.removeAllRanges();
+    selection.addRange(range);
+  }
+
+  it("拦下方向键字符的插入，改成移动光标", async () => {
+    editable.textContent = "修改颜色";
+    caretAt(editable.firstChild!, 4);
+    const modify = vi.fn();
+    (window.getSelection() as Selection & { modify: unknown }).modify = modify;
+    const event = new InputEvent("beforeinput", { bubbles: true, cancelable: true, inputType: "insertText", data: "\uF702" });
+    await act(async () => {
+      editable.dispatchEvent(event);
+    });
+    expect(event.defaultPrevented).toBe(true);
+    expect(modify).toHaveBeenCalledExactlyOnceWith("move", "backward", "character");
+  });
+
+  it("普通文字照常插入", async () => {
+    const event = new InputEvent("beforeinput", { bubbles: true, cancelable: true, inputType: "insertText", data: "中" });
+    await act(async () => {
+      editable.dispatchEvent(event);
+    });
+    expect(event.defaultPrevented).toBe(false);
+  });
+
+  it("已经混进去的方向键字符在输入时清掉，光标留在原来的字后面", async () => {
+    editable.textContent = "修改\uF7021.颜色\uF703";
+    caretAt(editable.firstChild!, 7);
+    await act(async () => {
+      editable.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    expect(editable.textContent).toBe("修改1.颜色");
+    const range = window.getSelection()!.getRangeAt(0);
+    expect(range.startOffset).toBe(6);
+    expect(props.emitChange).toHaveBeenCalled();
+  });
+
+  it("发送时去掉方向键字符", async () => {
+    editable.textContent = "改成\uF703\uF703黑色";
+    await act(async () => {
+      editable.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Enter", keyCode: 13 }));
+    });
+    expect(props.onSubmit).toHaveBeenCalledExactlyOnceWith("改成黑色");
+  });
+});

@@ -46,6 +46,7 @@ import {
   renderFileTags,
   sanitizeEditableHtml,
   setCaretOffset,
+  withoutMacFunctionKeys,
 } from "@/components/application/ai-chat/file-tags";
 import { ipc } from "@/lib/ipc";
 import { listenSettingsChanged } from "@/lib/events";
@@ -166,7 +167,9 @@ export function Composer({
     if (!el) return;
     // Keep the DOM truly empty when the text is, so the :empty placeholder
     // shows (browsers like to leave a stray <br> behind).
-    const text = extractText(el);
+    // Never pass on macOS function-key characters some IMEs insert for arrow
+    // presses (see composer-editable); the DOM is cleaned once composition ends.
+    const text = withoutMacFunctionKeys(extractText(el));
     if (text === "" && el.innerHTML !== "") el.innerHTML = "";
     lastEmittedRef.current = text;
     onValueChange?.(text);

@@ -389,3 +389,62 @@ export function insertTextAtCaret(el: HTMLElement, text: string) {
     selection?.addRange(caretRange);
   }
 }
+
+/**
+ * macOS encodes arrow / Home / End / F-keys as characters in U+F700–U+F8FF
+ * (NSUpArrowFunctionKey = U+F700 …). Some third-party IMEs (seen with Baidu
+ * Pinyin) hand those keys to WKWebView as *text*, so an arrow press inserts an
+ * invisible character — rendered as a box and sent to the model verbatim —
+ * instead of moving the caret.
+ */
+export const MAC_FUNCTION_KEY_RE = /[\uF700-\uF8FF]/g;
+
+/** `text` without macOS function-key characters. */
+export function withoutMacFunctionKeys(text: string): string {
+  return text.replace(MAC_FUNCTION_KEY_RE, "");
+}
+
+/**
+ * Remove macOS function-key characters from the editable's text nodes,
+ * keeping the caret on the same character. Returns true when it changed
+ * anything. Must not run mid-composition (touching the DOM cancels the IME).
+ */
+export function stripMacFunctionKeys(el: HTMLElement): boolean {
+  const nodes: Text[] = [];
+  const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    const data = (node as Text).data;
+    MAC_FUNCTION_KEY_RE.lastIndex = 0;
+    if (MAC_FUNCTION_KEY_RE.test(data)) nodes.push(node as Text);
+  }
+  if (nodes.length === 0) return false;
+  const caret = getCaretOffset(el);
+  const removedBeforeCaret =
+    caret >= 0 ? (extractText(el).slice(0, caret).match(MAC_FUNCTION_KEY_RE)?.length ?? 0) : 0;
+  for (const node of nodes) node.data = withoutMacFunctionKeys(node.data);
+  if (caret >= 0) setCaretOffset(el, caret - removedBeforeCaret);
+  return true;
+}
+
+/**
+ * The caret move a macOS function-key character stands for, or null for
+ * other function keys (F1…, which are simply dropped).
+ */
+export function macFunctionKeyMove(ch: string): [direction: "backward" | "forward", granularity: "character" | "line" | "lineboundary"] | null {
+  switch (ch) {
+    case "\uF702":
+      return ["backward", "character"];
+    case "\uF703":
+      return ["forward", "character"];
+    case "\uF700":
+      return ["backward", "line"];
+    case "\uF701":
+      return ["forward", "line"];
+    case "\uF729":
+      return ["backward", "lineboundary"];
+    case "\uF72B":
+      return ["forward", "lineboundary"];
+    default:
+      return null;
+  }
+}

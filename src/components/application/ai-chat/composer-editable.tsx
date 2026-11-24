@@ -3,12 +3,17 @@ import {
   type MutableRefObject,
   type RefObject,
   useCallback,
+  useEffect,
 } from "react";
 import { useTranslation } from "react-i18next";
 import {
   COMPOSER_INSERTING_ATTR,
   extractText,
   insertTextAtCaret,
+  macFunctionKeyMove,
+  MAC_FUNCTION_KEY_RE,
+  stripMacFunctionKeys,
+  withoutMacFunctionKeys,
 } from "@/components/application/ai-chat/file-tags";
 import { readClipboardFiles } from "@/components/application/ai-chat/clipboard-files";
 import { ipc } from "@/lib/ipc";
@@ -125,6 +130,33 @@ export function ComposerEditable({
   );
   // Send gesture labels name the real modifier: ⌘ on macOS, Ctrl elsewhere.
   const isMac = navigator.platform.includes("Mac");
+
+  // Some macOS IMEs (Baidu Pinyin) deliver arrow / Home / End presses as
+  // text: U+F702 for ←, U+F703 for → … Without this an arrow press inserts
+  // an invisible character (a box on screen, sent to the model as-is) and the
+  // caret does not move. Cancel such an insert and make the move it stands
+  // for. Inserts that cannot be cancelled (IME commits) are cleaned up in
+  // onInput / onCompositionEnd.
+  useEffect(() => {
+    const el = editableRef.current;
+    if (!el) return;
+    const onBeforeInput = (event: InputEvent) => {
+      const data = event.data;
+      if (!data || !event.inputType.startsWith("insert")) return;
+      MAC_FUNCTION_KEY_RE.lastIndex = 0;
+      if (!MAC_FUNCTION_KEY_RE.test(data) || withoutMacFunctionKeys(data) !== "") return;
+      if (!event.cancelable) return;
+      event.preventDefault();
+      const selection = window.getSelection();
+      for (const ch of data) {
+        const move = macFunctionKeyMove(ch);
+        if (move && selection) selection.modify?.("move", move[0], move[1]);
+      }
+    };
+    el.addEventListener("beforeinput", onBeforeInput);
+    return () => el.removeEventListener("beforeinput", onBeforeInput);
+  }, [editableRef]);
+
   return (
     <div
       ref={editableRef}
@@ -141,6 +173,7 @@ export function ComposerEditable({
         // on it (especially syncTags → innerHTML) wipes the undo step the
         // command just opened. The caller emits once the insert returns.
         if (editableRef.current?.hasAttribute(COMPOSER_INSERTING_ATTR)) return;
+        if (!isComposingRef.current && editableRef.current) stripMacFunctionKeys(editableRef.current);
         emitChange();
         syncTags();
         if (!isComposingRef.current) updateTriggers();
@@ -155,6 +188,7 @@ export function ComposerEditable({
       onCompositionEnd={() => {
         isComposingRef.current = false;
         setIsComposing(false);
+        if (editableRef.current) stripMacFunctionKeys(editableRef.current);
         // Composition commits text without an input event in WKWebView.
         emitChange();
         syncTags();
@@ -206,7 +240,7 @@ export function ComposerEditable({
         // Fires while streaming too: the host queues the message behind the
         // active turn instead of dropping it.
         const el = editableRef.current;
-        if (!disabled && el) onSubmit?.(extractText(el));
+        if (!disabled && el) onSubmit?.(withoutMacFunctionKeys(extractText(el)));
       }}
       onPaste={(event) => {
         const { imageFiles, otherFiles, uriPaths } = readClipboardFiles(
