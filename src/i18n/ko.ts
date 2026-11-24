@@ -2473,6 +2473,10 @@ export const ko: Messages = {
     me: "(나)",
   },
   ccplAccount: {
+    pool: "풀",
+    poolDesc: "요청이 사용할 풀: 공용 풀 또는 관리자가 지정한 전용 그룹. 다음 요청부터 바로 적용됩니다.",
+    poolOwn: "{{pool}} · 내 그룹",
+    poolSwitched: "{{pool}} 풀로 전환했습니다.",
     title: "계정",
     desc: "자체 호스팅 ccpl 풀에 로그인하거나 가입하거나, 이미 발급받은 토큰으로 로그인합니다. 로그인하면 토큰이 소속 그룹에 맞는 엔진(Claude, Codex 또는 Grok)의 \"ccpl\" 채널에 기록됩니다. 새 계정은 관리자가 일일 한도를 설정하기 전까지 사용할 수 없습니다.",
     account: "계정",

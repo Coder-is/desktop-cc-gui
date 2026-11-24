@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const ccplAccountStatus = vi.fn();
 const ccplTokenLogin = vi.fn();
 const ccplMe = vi.fn();
+const ccplSetPool = vi.fn();
 const ccplServerInfo = vi.fn();
 const ccplCaptcha = vi.fn();
 const accountUsageQuery = vi.fn();
@@ -13,6 +14,7 @@ vi.mock("@/lib/ipc", () => ({
     ccplAccountStatus: () => ccplAccountStatus(),
     ccplTokenLogin: (form: unknown) => ccplTokenLogin(form),
     ccplMe: (range: unknown) => ccplMe(range),
+    ccplSetPool: (groupId: unknown) => ccplSetPool(groupId),
     ccplServerInfo: (baseUrl: unknown) => ccplServerInfo(baseUrl),
     ccplCaptcha: (baseUrl: unknown) => ccplCaptcha(baseUrl),
     accountUsageQuery: (query: unknown) => accountUsageQuery(query),
@@ -44,6 +46,7 @@ beforeEach(() => {
   ccplAccountStatus.mockReset().mockResolvedValue(SIGNED_OUT);
   ccplTokenLogin.mockReset();
   ccplMe.mockReset().mockResolvedValue(null);
+  ccplSetPool.mockReset().mockResolvedValue({});
   ccplServerInfo.mockReset();
   ccplCaptcha.mockReset();
   accountUsageQuery.mockReset().mockResolvedValue({ rows: [], firstDay: null, scannedAt: Date.now(), scanning: false, unknownModels: [] });
@@ -140,6 +143,21 @@ describe("CcplAccountSection token sign-in", () => {
     await act(async () => {});
 
     expect(container.textContent).toContain(i18n.t("ccplAccount.groupChanged", { group: "Codex" }));
+  });
+
+  it("switches the pool and reloads the status", async () => {
+    ccplAccountStatus.mockResolvedValue({ signedIn: true, baseUrl: "https://cc.example.com", username: "alice", tokenHint: "sk-ccpl-…c123", provider: "anthropic" });
+    const me = { hint: "sk-ccpl-…c123", quotaPending: false, dailyLimit: 0, dailySpent: 0, models: [], restricted: false, range: "24h", provider: "anthropic", group: "cc", groups: ["cc", "zzg", "vip"], ownGroup: "vip" };
+    ccplMe.mockResolvedValue(me);
+    await act(async () => root.render(<CcplAccountSection />));
+    await act(async () => {});
+    expect(button("cc").disabled).toBe(true);
+    const own = button(i18n.t("ccplAccount.poolOwn", { pool: "vip" }));
+    ccplMe.mockResolvedValue({ ...me, group: "vip" });
+    await act(async () => own.click());
+    expect(ccplSetPool).toHaveBeenCalledExactlyOnceWith("vip");
+    expect(container.textContent).toContain(i18n.t("ccplAccount.poolSwitched", { pool: "vip" }));
+    expect(button(i18n.t("ccplAccount.poolOwn", { pool: "vip" })).getAttribute("aria-pressed")).toBe("true");
   });
 
   it("asks for a token instead of calling the server when the field is empty", async () => {

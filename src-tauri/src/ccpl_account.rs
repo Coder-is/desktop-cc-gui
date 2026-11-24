@@ -389,6 +389,21 @@ pub async fn ccpl_ranking(range: Option<String>) -> Result<Value, String> {
     .await
 }
 
+/// 用保存的令牌切号池（`POST /v1/me/pool`）：只能在 `/v1/me` 给出的 groups 里选，服务端会再校验。
+/// 成功回令牌信息，其中 group 是切换后的号池。
+#[tauri::command]
+pub async fn ccpl_set_pool(group_id: String) -> Result<Value, String> {
+    let account = read_account().ok_or_else(|| error_text(401, &Value::Null))?;
+    let body = serde_json::json!({ "groupId": group_id });
+    send(
+        client()?
+            .post(format!("{}/v1/me/pool", account.base_url))
+            .bearer_auth(&account.token)
+            .json(&body),
+    )
+    .await
+}
+
 /// 退出：只删本地保存的账号，已经写进渠道的令牌留着（用户可能还要用）。
 #[tauri::command]
 pub fn ccpl_logout() -> Result<(), String> {

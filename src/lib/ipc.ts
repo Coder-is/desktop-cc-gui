@@ -1577,6 +1577,8 @@ export const ipc = {
     invoke<AccountUsageResponse>("account_usage_query", { query }),
   /** Full ccpl usage leaderboard for the signed-in token's server. */
   ccplRanking: (range: CcplRankRange) => invoke<CcplRanking>("ccpl_ranking", { range }),
+  /** Switch the signed-in token's pool to one of `CcplMe.groups`. */
+  ccplSetPool: (groupId: string) => invoke<Partial<CcplMe>>("ccpl_set_pool", { groupId }),
   // settings
   getAppSettings: fetchAppSettings,
   /** De-cached read: settings the backend changed on its own (the pairing key
@@ -2456,6 +2458,12 @@ export interface CcplMe {
   /** Every group type the token can use, main group first: Claude and Codex
    *  when an admin also gave it a Codex group. Absent on older servers. */
   providers?: CcplProvider[];
+  /** Pool (group id) the token's requests go to right now. */
+  group?: string;
+  /** Pools the token may switch between: the shared pools plus its own group. */
+  groups?: string[];
+  /** The token's own group assigned by the admin; "" when it only has shared pools. */
+  ownGroup?: string;
 }
 
 /** One person on the ccpl usage leaderboard (`GET /v1/ranking`). Only the

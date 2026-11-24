@@ -317,6 +317,24 @@ export function CcplAccountSection() {
     void loadMe(next);
   };
 
+  // Switch which pool the token's requests go to (same rules as the ccpl web
+  // console: the shared pools or the token's own group). Reload the status so
+  // the group type check below sees a switch onto another kind of group.
+  const switchPool = async (groupId: string) => {
+    setError(null);
+    setNotice(null);
+    setBusy(true);
+    try {
+      await ipc.ccplSetPool(groupId);
+      setNotice(t("ccplAccount.poolSwitched", { pool: groupId }));
+    } catch (e) {
+      setError(errorText(e));
+    } finally {
+      setBusy(false);
+    }
+    await loadMe(range);
+  };
+
   const signedIn = !!status?.signedIn;
   // The server's current group type (newer ccpl) wins over the one recorded at
   // sign-in; a difference means an admin moved the token and the channels
@@ -375,6 +393,24 @@ export function CcplAccountSection() {
                   >
                     {GROUP_NAMES[currentGroup]}
                   </span>
+                </SettingsRow>
+              )}
+              {me?.group && (me.groups?.length ?? 0) > 1 && (
+                <SettingsRow anchor="ccplPool" label={t("ccplAccount.pool")} description={t("ccplAccount.poolDesc")}>
+                  <div className="flex flex-wrap items-center justify-end gap-2" role="group" aria-label={t("ccplAccount.pool")}>
+                    {me.groups!.map((id) => (
+                      <Button
+                        key={id}
+                        size="xs"
+                        variant={me.group === id ? "primary" : "ghost"}
+                        aria-pressed={me.group === id}
+                        disabled={busy || me.group === id}
+                        onClick={() => void switchPool(id)}
+                      >
+                        {id === me.ownGroup ? t("ccplAccount.poolOwn", { pool: id }) : id}
+                      </Button>
+                    ))}
+                  </div>
                 </SettingsRow>
               )}
               <SettingsRow

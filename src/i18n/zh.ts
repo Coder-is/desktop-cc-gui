@@ -2561,6 +2561,10 @@ export const zh = {
     me: "（你）",
   },
   ccplAccount: {
+    pool: "号池",
+    poolDesc: "请求走哪个号池：总号池，或管理员给你的专属分组。切换马上生效，下一个请求就用新号池的号。",
+    poolOwn: "{{pool}} · 自己的",
+    poolSwitched: "已切到号池 {{pool}}。",
     title: "账号",
     desc: "登录或注册自建的 ccpl 号池账号，也可以直接粘贴已申请的令牌登录。登录后令牌会写入它所在分组对应引擎（Claude、Codex 或 Grok）的「ccpl」渠道；新注册的账号默认没有额度，需要管理员设置每日额度后才能使用。",
     account: "账号",

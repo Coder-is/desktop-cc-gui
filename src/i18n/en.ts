@@ -2631,6 +2631,10 @@ export const en: Messages = {
     me: "(you)",
   },
   ccplAccount: {
+    pool: "Pool",
+    poolDesc: "Which pool your requests use: a shared pool, or the group your admin assigned to you. Takes effect from the next request.",
+    poolOwn: "{{pool}} · yours",
+    poolSwitched: "Switched to pool {{pool}}.",
     title: "Account",
     desc: "Sign in to or register on a self-hosted ccpl pool, or paste a token you already have. After signing in, the token is written into the \"ccpl\" channel of the engine its group serves (Claude, Codex or Grok). New accounts start with no quota until an admin sets a daily limit.",
     account: "Account",

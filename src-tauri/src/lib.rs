@@ -425,6 +425,7 @@ pub fn run() {
             ccpl_account::ccpl_token_login,
             ccpl_account::ccpl_me,
             ccpl_account::ccpl_ranking,
+            ccpl_account::ccpl_set_pool,
             ccpl_account::ccpl_logout,
             ccpl_account::account_usage_query,
             // settings
