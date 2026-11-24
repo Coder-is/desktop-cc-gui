@@ -8,7 +8,7 @@ import {
   SESSION_SELECTION_CHANGED_TOPIC,
 } from "@/features/plugins/runtime/events";
 import { setPluginSessionEffort, useChatStore } from "./store";
-import { OPEN_TABS_KEY } from "./store/persistence";
+import { OPEN_TABS_KEY, sessionKey } from "./store/persistence";
 import { EMPTY_SESSION } from "./store/stream";
 import { handleEngineEvents, type EngineEventDeps } from "./store/engine-events";
 import { registerSessionHooks, registerTurnHooks } from "@/features/plugins/runtime/hooks";
@@ -2046,5 +2046,55 @@ describe("workspace default engine", () => {
     });
     expect(activeDuringCallback).toBeNull();
     expect(useChatStore.getState().active?.engine).toBe("codex");
+  });
+});
+
+// 有记录的对话里换引擎：开一个新引擎的新对话（原对话留着），草稿跟过去；
+// 新对话第一条消息带上原对话最近几轮当背景，之后的消息不再带。
+describe("switching engine inside a conversation with history", () => {
+  beforeEach(resetStore);
+
+  it("opens a new conversation on the picked engine and carries the recent turns once", async () => {
+    const codexTab = { engine: "codex", sessionId: "s-codex", workspacePath: WS };
+    const codexKey = sessionKey("codex", "s-codex", WS);
+    useChatStore.setState({
+      activeEngine: "codex",
+      openTabs: [codexTab],
+      active: codexTab,
+      bySession: {
+        [codexKey]: {
+          ...EMPTY_SESSION,
+          messages: [
+            { seq: 1, role: "user", text: "你是什么模型", ts: null },
+            { seq: 2, role: "thinking", text: "内部思考，不该带", ts: null },
+            { seq: 3, role: "assistant", text: "我是 Codex，基于 OpenAI 的 GPT-6 模型。", ts: null },
+          ],
+        },
+      },
+      drafts: { [codexKey]: "你能做什么" },
+    });
+
+    useChatStore.getState().setActiveEngine("claude");
+    let s = useChatStore.getState();
+    expect(s.active).toMatchObject({ engine: "claude", sessionId: null, workspacePath: WS });
+    expect(s.openTabs.some((t) => t.engine === "codex" && t.sessionId === "s-codex")).toBe(true);
+    expect(s.pendingRuntimeSwitch).toMatchObject({ sourceEngine: "codex", sourceSessionId: "s-codex", targetEngine: "claude" });
+    expect(s.drafts[sessionKey("claude", null, WS)]).toBe("你能做什么");
+    expect(s.drafts[codexKey]).toBeUndefined();
+
+    await useChatStore.getState().send("你能做什么", []);
+    const first = vi.mocked(ipc.sendMessage).mock.calls.at(-1)![0];
+    expect(first).toMatchObject({ engine: "claude", sessionId: null, prompt: "你能做什么" });
+    const handoff = first.promptContributions.find((c) => c.id === "ccgui:engine-handoff");
+    expect(handoff?.placement).toBe("system-tail");
+    expect(handoff?.content).toContain("用户：你是什么模型");
+    expect(handoff?.content).toContain("助手：我是 Codex，基于 OpenAI 的 GPT-6 模型。");
+    expect(handoff?.content).not.toContain("内部思考");
+    s = useChatStore.getState();
+    expect(s.pendingRuntimeSwitch).toBeNull();
+
+    await useChatStore.getState().send("再说一次", []);
+    const second = vi.mocked(ipc.sendMessage).mock.calls.at(-1)![0];
+    expect(second.promptContributions.some((c) => c.id === "ccgui:engine-handoff")).toBe(false);
   });
 });

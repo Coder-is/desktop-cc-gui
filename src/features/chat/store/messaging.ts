@@ -89,6 +89,7 @@ import { emitSessionActivated } from "@/features/plugins/runtime/events";
 import { sessionSelection } from "./selection";
 import type { RuntimeSwitchEvent } from "@ccgui/plugin-sdk";
 import type { ChatStore } from "./types";
+import { buildHandoffContext, handoffContribution } from "./engine-handoff";
 import type {
   LoadHistoryPage,
   StoreGet,
@@ -379,7 +380,13 @@ export function createMessagingActions(
       tab.sessionId !== null,
     );
     if (prepared.next) set({ sessionContributions: prepared.next });
-    const promptContributions = prepared.promptContributions;
+    let promptContributions = prepared.promptContributions;
+    // 从别的引擎的对话切过来的第一条：带上原对话最近几轮当背景（见 engine-handoff.ts）。
+    if (switchEvent && pendingSwitch) {
+      const sourceKey = sessionKey(pendingSwitch.sourceEngine, pendingSwitch.sourceSessionId, pendingSwitch.workspacePath);
+      const context = buildHandoffContext(get().bySession[sourceKey]?.messages ?? [], pendingSwitch.sourceEngine);
+      if (context) promptContributions = [...promptContributions, handoffContribution(context)];
+    }
     // Register the run lifecycle BEFORE the send: a fast engine's
     // session/delta/done events may outrun the send result, and unregistered
     // events would lose their runtime and afterTurn delivery.

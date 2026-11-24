@@ -210,8 +210,11 @@ describe("composer draft survives session-key changes", () => {
       drafts: { [NATIVE]: "下一条消息" },
     });
 
+    // 有记录的对话换引擎会开一个新引擎的新对话，草稿跟着过去，不会丢。
     useChatStore.getState().setActiveEngine("codex");
 
-    expect(useChatStore.getState().drafts[NATIVE]).toBe("下一条消息");
+    const state = useChatStore.getState();
+    expect(state.active).toMatchObject({ engine: "codex", sessionId: null });
+    expect(state.drafts[sessionKey("codex", null, WS)]).toBe("下一条消息");
   });
 });

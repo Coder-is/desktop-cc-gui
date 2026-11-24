@@ -481,6 +481,22 @@ export function createTabActions(
           retryingByKey: moveRetryingFlag(s.retryingByKey, oldKey, newKey),
         };
       });
+      // 有记录的对话（已经有真实会话 id）换引擎：对话本身没法交给另一个 CLI，原来这里只换了底部的标签，
+      // 消息照样发给原来的引擎。现在在同一个工作区开一个新引擎的新对话，没发出去的草稿和图片跟过去；
+      // startNewChat 会记下这次切换，新对话第一条消息带上原对话最近几轮当背景（见 engine-handoff.ts）。
+      if (beforeActive && beforeActive.sessionId !== null && beforeActive.engine !== engine) {
+        const fromKey = sessionKey(beforeActive.engine, beforeActive.sessionId, beforeActive.workspacePath);
+        const toKey = sessionKey(engine, null, beforeActive.workspacePath);
+        get().startNewChat(beforeActive.workspacePath);
+        set((s) => {
+          const draft = s.drafts[fromKey];
+          if (!draft || s.drafts[toKey]) return moveComposerState(s, fromKey, toKey);
+          const drafts = { ...s.drafts, [toKey]: draft };
+          delete drafts[fromKey];
+          return { drafts, ...moveComposerState(s, fromKey, toKey) };
+        });
+        return;
+      }
       if (retargets) {
         const nextActive = get().active;
         emitSessionActivated(
