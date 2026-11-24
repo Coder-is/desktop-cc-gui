@@ -1575,6 +1575,8 @@ export const ipc = {
   /** 设置 → 账号 usage by CLI × model (local CLI logs); refused while signed out. */
   accountUsageQuery: (query: AccountUsageQuery) =>
     invoke<AccountUsageResponse>("account_usage_query", { query }),
+  /** Full ccpl usage leaderboard for the signed-in token's server. */
+  ccplRanking: (range: CcplRankRange) => invoke<CcplRanking>("ccpl_ranking", { range }),
   // settings
   getAppSettings: fetchAppSettings,
   /** De-cached read: settings the backend changed on its own (the pairing key
@@ -2454,4 +2456,32 @@ export interface CcplMe {
   /** Every group type the token can use, main group first: Claude and Codex
    *  when an admin also gave it a Codex group. Absent on older servers. */
   providers?: CcplProvider[];
+}
+
+/** One person on the ccpl usage leaderboard (`GET /v1/ranking`). Only the
+ *  token's remark is shown ("未备注" when it has none), never the token. */
+export interface CcplRankRow {
+  rank: number;
+  name: string;
+  /** Cost for the range (7-day average for 30d), nano USD. */
+  weekCostNano: number;
+  /** The same cost as a share of one account's weekly quota; null when the
+   *  server cannot estimate it yet. */
+  weekPercent: number | null;
+  requests: number;
+  activeDays: number;
+  kind?: string;
+  /** This is the signed-in token's own row. */
+  me?: boolean;
+}
+
+export type CcplRankRange = "today" | "7d" | "30d";
+
+export interface CcplRanking {
+  range: CcplRankRange;
+  people: number;
+  /** 0 = the signed-in token has no requests in the range. */
+  meRank: number;
+  rows: CcplRankRow[];
+  at: string;
 }

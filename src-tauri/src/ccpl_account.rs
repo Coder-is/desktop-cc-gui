@@ -372,6 +372,23 @@ pub async fn ccpl_me(range: Option<String>) -> Result<Value, String> {
     .await
 }
 
+/// 用保存的令牌看完整用量排行（`GET /v1/ranking`）：每人的名次、名字和用量。range 是 today / 7d / 30d。
+#[tauri::command]
+pub async fn ccpl_ranking(range: Option<String>) -> Result<Value, String> {
+    let account = read_account().ok_or_else(|| error_text(401, &Value::Null))?;
+    let range = match range.as_deref() {
+        Some("today") => "today",
+        Some("30d") => "30d",
+        _ => "7d",
+    };
+    send(
+        client()?
+            .get(format!("{}/v1/ranking?range={range}", account.base_url))
+            .bearer_auth(&account.token),
+    )
+    .await
+}
+
 /// 退出：只删本地保存的账号，已经写进渠道的令牌留着（用户可能还要用）。
 #[tauri::command]
 pub fn ccpl_logout() -> Result<(), String> {

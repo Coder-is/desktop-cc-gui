@@ -2451,6 +2451,27 @@ export const ko: Messages = {
       checkedAt: "{{time}}에 확인됨 · {{ms}} ms"
     }
   },
+  ccplRanking: {
+    title: "순위",
+    desc: "로그인한 ccpl 서버의 전체 사용량 순위입니다. 관리 콘솔의 사용량 순위와 같은 통계, 같은 순서이며 토큰 메모와 사용량만 표시합니다.",
+    signedOut: "먼저 「계정」에서 ccpl 계정에 로그인하세요.",
+    notSupported: "이 서버에는 아직 순위 API가 없습니다. ccpl 업그레이드가 필요합니다.",
+    loading: "불러오는 중…",
+    empty: "이 기간에는 사용한 사람이 없습니다.",
+    range_today: "오늘",
+    range_7d: "7일",
+    range_30d: "30일",
+    summary: "{{people}}명 중 {{rank}}위",
+    summaryAbsent: "이 기간에 요청이 없습니다 (총 {{people}}명)",
+    colName: "사용자",
+    colCost_today: "오늘 사용량",
+    colCost_7d: "7일 사용량",
+    colCost_30d: "주 평균",
+    colRequests: "요청",
+    colDays: "활동 일수",
+    quota: "≈ 주간 한도 {{percent}}%",
+    me: "(나)",
+  },
   ccplAccount: {
     title: "계정",
     desc: "자체 호스팅 ccpl 풀에 로그인하거나 가입하거나, 이미 발급받은 토큰으로 로그인합니다. 로그인하면 토큰이 소속 그룹에 맞는 엔진(Claude, Codex 또는 Grok)의 \"ccpl\" 채널에 기록됩니다. 새 계정은 관리자가 일일 한도를 설정하기 전까지 사용할 수 없습니다.",

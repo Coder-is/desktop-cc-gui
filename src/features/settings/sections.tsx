@@ -28,6 +28,8 @@ import { GeneralSection } from "./GeneralSection";
 import { PetSection } from "./PetSection";
 import { ProxySection } from "./ProxySection";
 import { CcplAccountSection } from "./CcplAccountSection";
+import { CcplRankingSection } from "./CcplRankingSection";
+import Trophy from "lucide-react/dist/esm/icons/trophy";
 import { isWeb } from "@/lib/transport";
 import UserRound from "lucide-react/dist/esm/icons/user-round";
 import { WorkspacesSection } from "./WorkspacesSection";
@@ -102,6 +104,16 @@ if (!isWeb) {
     group: "system",
     order: 6,
     component: CcplAccountSection,
+  });
+  // Full usage leaderboard of the signed-in ccpl server, right after the account page.
+  settingsRegistry.register({
+    id: "ccplRanking",
+    key: "ccplRanking",
+    label: () => i18n.t("ccplRanking.title"),
+    icon: Trophy,
+    group: "system",
+    order: 6.5,
+    component: CcplRankingSection,
   });
 }
 settingsRegistry.register({
