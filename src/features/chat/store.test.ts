@@ -8,6 +8,8 @@ import {
   SESSION_SELECTION_CHANGED_TOPIC,
 } from "@/features/plugins/runtime/events";
 import { setPluginSessionEffort, useChatStore } from "./store";
+import { listenScanProgress } from "@/lib/events";
+import i18n from "@/lib/i18n";
 import { OPEN_TABS_KEY, sessionKey } from "./store/persistence";
 import { EMPTY_SESSION } from "./store/stream";
 import { handleEngineEvents, type EngineEventDeps } from "./store/engine-events";
@@ -48,6 +50,7 @@ vi.mock("@/lib/ipc", () => ({
     getAppSettings: vi.fn(async () => ({})),
     updateAppSettings: vi.fn(async () => {}),
     rescanSessions: vi.fn(async () => {}),
+    renameSession: vi.fn(async () => {}),
     getCliConfig: vi.fn(async () => null),
   },
 }));
@@ -55,6 +58,7 @@ vi.mock("@/lib/events", () => ({
   listenEngineEvents: vi.fn(async () => () => {}),
   listenSessionsChanged: vi.fn(async () => () => {}),
   listenComputerUseEscape: vi.fn(async () => () => {}),
+  listenScanProgress: vi.fn(async () => () => {}),
 }));
 
 const WS = "/tmp/ws";
@@ -2096,5 +2100,46 @@ describe("switching engine inside a conversation with history", () => {
     await useChatStore.getState().send("再说一次", []);
     const second = vi.mocked(ipc.sendMessage).mock.calls.at(-1)![0];
     expect(second.promptContributions.some((c) => c.id === "ccgui:engine-handoff")).toBe(false);
+  });
+});
+
+// 改名时会话还没被扫描收进列表（刚建的对话）：先扫一次再改，成功就不报错；扫完还没有才报「尚未入库」。
+describe("renameSession for a conversation not indexed yet", () => {
+  beforeEach(() => {
+    resetStore();
+    vi.mocked(ipc.renameSession).mockReset();
+    vi.mocked(ipc.rescanSessions).mockReset();
+    let onProgress: ((p: { done: number; total: number; finished: boolean }) => void) | null = null;
+    vi.mocked(listenScanProgress).mockImplementation(async (cb) => {
+      onProgress = cb as typeof onProgress;
+      return () => {
+        onProgress = null;
+      };
+    });
+    vi.mocked(ipc.rescanSessions).mockImplementation(async () => {
+      onProgress?.({ done: 1, total: 1, finished: true });
+    });
+  });
+
+  it("rescans and retries once when the session is missing", async () => {
+    vi.mocked(ipc.renameSession).mockRejectedValueOnce("CCGUI_SESSION_NOT_FOUND").mockResolvedValueOnce(undefined);
+    await useChatStore.getState().renameSession("claude", "s-new", "新名字");
+    expect(ipc.rescanSessions).toHaveBeenCalledTimes(1);
+    expect(ipc.renameSession).toHaveBeenCalledTimes(2);
+    expect(useChatStore.getState().actionError).toBeNull();
+  });
+
+  it("still reports the missing session when the rescan does not find it", async () => {
+    vi.mocked(ipc.renameSession).mockRejectedValue("CCGUI_SESSION_NOT_FOUND");
+    await useChatStore.getState().renameSession("claude", "s-gone", "新名字");
+    expect(ipc.renameSession).toHaveBeenCalledTimes(2);
+    expect(useChatStore.getState().actionError).toBe(i18n.t("chat.renameSessionMissing"));
+  });
+
+  it("does not rescan for other errors", async () => {
+    vi.mocked(ipc.renameSession).mockRejectedValue("disk full");
+    await useChatStore.getState().renameSession("claude", "s-1", "新名字");
+    expect(ipc.rescanSessions).not.toHaveBeenCalled();
+    expect(useChatStore.getState().actionError).toBe("disk full");
   });
 });

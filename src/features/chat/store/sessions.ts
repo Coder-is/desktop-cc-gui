@@ -9,7 +9,7 @@ import {
   type Workspace,
 } from "@/lib/ipc";
 import type { EffortLevel } from "@/components/application/ai-chat/cli-menu";
-import { listenEngineEvents, listenSessionsChanged, listenComputerUseEscape } from "@/lib/events";
+import { listenEngineEvents, listenSessionsChanged, listenComputerUseEscape, listenScanProgress } from "@/lib/events";
 import { errorText } from "@/lib/errors";
 import { writeStored } from "@/lib/storage";
 import { subscribeTauriEvent } from "@/hooks/use-tauri-event";
@@ -1422,7 +1422,15 @@ export function createSessionActions(
 
     renameSession: async (engine, sessionId, title) => {
       try {
-        await ipc.renameSession(engine, sessionId, title);
+        try {
+          await ipc.renameSession(engine, sessionId, title);
+        } catch (error) {
+          // 刚建的对话还没被后台扫描收进会话列表（比如换引擎后新开的对话）：先扫一次再改一次。
+          // 还是没有（远程 / 插件的会话、文件已删）才报错。
+          if (!isSessionNotFound(error)) throw error;
+          await rescanAndWait();
+          await ipc.renameSession(engine, sessionId, title);
+        }
         await get().refreshSessions();
         set({ actionError: null });
       } catch (error) {
@@ -1430,4 +1438,32 @@ export function createSessionActions(
       }
     },
   };
+}
+
+/** 改名时后端回「会话不在列表里」。 */
+function isSessionNotFound(error: unknown): boolean {
+  const text = typeof error === "string" ? error : error instanceof Error ? error.message : "";
+  return text === "CCGUI_SESSION_NOT_FOUND";
+}
+
+/** 改名前补扫等多久：扫描没有可更新的文件时不发完成事件，等不到就照样往下走。 */
+export const RENAME_RESCAN_TIMEOUT_MS = 8000;
+
+/** 触发一次会话扫描，等它发出完成事件（或超时）。先挂上监听再开扫，免得扫得快把完成事件漏掉。 */
+async function rescanAndWait(): Promise<void> {
+  let done: () => void = () => {};
+  const finished = new Promise<void>((resolve) => {
+    done = resolve;
+  });
+  const timer = setTimeout(() => done(), RENAME_RESCAN_TIMEOUT_MS);
+  const unlisten = await listenScanProgress((progress) => {
+    if (progress.finished) done();
+  });
+  try {
+    await ipc.rescanSessions();
+    await finished;
+  } finally {
+    clearTimeout(timer);
+    unlisten();
+  }
 }
