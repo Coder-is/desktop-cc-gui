@@ -7,7 +7,7 @@
  *  A ccpl token belongs to exactly one group and the group's type decides the
  *  client it accepts, so the same token written into the other engines would
  *  only be rejected there. When the type is unknown (old server, lookup
- *  failed) all three are written as before. */
+ *  failed) all three are written as before. 反重力（Gemini）分组写进 Codex 引擎的渠道，见 ccplEnginesFor。 */
 
 import { ipc, type CcplProvider } from "@/lib/ipc";
 import { notifyCliConfigChanged } from "./providers";
@@ -31,22 +31,37 @@ export function ccplEnginesForAll(providers: readonly (CcplProvider | "")[]): re
   return CCPL_ENGINES.filter((engine) => known.some((p) => ccplEnginesFor(p).includes(engine)));
 }
 
-/** Engines a token of this group type works with. Antigravity (Gemini) groups
- *  have no engine here yet: ccpl only accepts chat-completions clients there
- *  and still degrades tool calls to text, which coding agents cannot use. */
+/** Engines a token of this group type works with.
+ *  反重力（Gemini）分组走 Codex 引擎：ccpl 在 Codex 用的同一个 /v1/responses 接口上服务它
+ *  （工具调用也通），并按 gemini-* 模型名把请求分到反重力分组。桌面端自带的「反重力（agy）」引擎
+ *  跑的是本机官方 CLI、用本机自己的 Google 登录，没有服务器地址可配，接不了 ccpl 令牌。 */
 export function ccplEnginesFor(provider: CcplProvider | ""): readonly CcplEngine[] {
   switch (provider) {
     case "anthropic":
       return ["claude"];
     case "codex":
+    case "antigravity":
       return ["codex"];
     case "grok":
       return ["grok"];
-    case "antigravity":
-      return [];
     default:
       return CCPL_ENGINES;
   }
+}
+
+/** ccpl 反重力分组默认提供的 Gemini 模型（和服务端给这类分组的兜底模型列表一致）。
+ *  令牌没有 Codex 分组时第一个当 Codex 渠道的默认模型；其余写进渠道的 extraModels，
+ *  Codex 引擎的模型列表里就能选到。 */
+export const CCPL_GEMINI_MODELS = ["gemini-4-neon", "gemini-4-carbon", "gemini-4-argon", "gemini-4-hydrogen"] as const;
+
+/** 按令牌能用的分组类型决定 Codex 渠道的模型：有 Codex 分组时沿用 Codex 预设的模型；
+ *  只有反重力分组时默认模型改成 Gemini（GPT 模型名在这个令牌上分不到任何分组）。
+ *  只要有反重力分组，Gemini 模型都会加进模型列表。 */
+export function ccplCodexModels(providers: readonly (CcplProvider | "")[]): { model?: string; extraModels: string[] } {
+  if (!providers.includes("antigravity")) return { extraModels: [] };
+  if (providers.includes("codex")) return { extraModels: [...CCPL_GEMINI_MODELS] };
+  const [model, ...rest] = CCPL_GEMINI_MODELS;
+  return { model, extraModels: rest };
 }
 
 function ccplPreset(engine: CcplEngine): ProviderPreset | undefined {
@@ -63,12 +78,14 @@ export function buildCcplChannels(
   baseUrl: string,
   token: string,
   username: string,
+  codex: { model?: string; extraModels?: readonly string[] } = {},
 ): Record<CcplEngine, Record<string, unknown>> {
   const root = rootOf(baseUrl);
   const v1 = `${root}/v1`;
   const remark = username ? `ccpl · ${username}` : "ccpl";
   const claudeEnv = ccplPreset("claude")?.env ?? {};
-  const codexModel = ccplPreset("codex")?.model || "gpt-5.1-codex";
+  const codexModel = codex.model || ccplPreset("codex")?.model || "gpt-5.1-codex";
+  const codexExtra = (codex.extraModels ?? []).filter((m) => m && m !== codexModel);
   const grokModel = ccplPreset("grok")?.model || "grok-build";
   return {
     claude: {
@@ -86,6 +103,8 @@ export function buildCcplChannels(
       baseUrl: v1,
       apiKey: token,
       model: codexModel,
+      // 渠道除 model 之外还能服务的模型（反重力分组的 Gemini 模型），模型列表会把它们列出来，见 use-engine-models。
+      ...(codexExtra.length > 0 ? { extraModels: codexExtra } : {}),
       settingsConfig: {
         config: buildCodexConfigToml("ccpl", v1, codexModel, "responses"),
         auth: { OPENAI_API_KEY: token },
@@ -106,6 +125,8 @@ export interface CcplApplyResult {
   /** Other engines' ccpl channels removed because they carried this very
    *  token, which their group would reject. */
   removed: CcplEngine[];
+  /** 令牌能用反重力分组、Gemini 模型已经加进 Codex 渠道（登录提示据此告诉用户去 Codex 里选）。 */
+  geminiViaCodex?: boolean;
 }
 
 /** Write the channel(s) for the token's group; with `activate`, also make
@@ -120,8 +141,8 @@ export async function applyCcplChannels(
   activate: boolean,
   provider: CcplProvider | "" | readonly CcplProvider[] = "",
 ): Promise<CcplApplyResult> {
-  const channels = buildCcplChannels(baseUrl, token, username);
   const providers: readonly (CcplProvider | "")[] = typeof provider === "string" ? [provider] : provider;
+  const channels = buildCcplChannels(baseUrl, token, username, ccplCodexModels(providers));
   const targets = ccplEnginesForAll(providers);
   const result: CcplApplyResult = { written: [], removed: [] };
   try {
@@ -130,6 +151,7 @@ export async function applyCcplChannels(
       if (activate) await ipc.setCurrentProvider(engine, CCPL_CHANNEL_ID);
       result.written.push(engine);
     }
+    if (providers.includes("antigravity") && result.written.includes("codex")) result.geminiViaCodex = true;
     if (providers.some(Boolean)) {
       const stale = CCPL_ENGINES.filter((engine) => !targets.includes(engine));
       if (stale.length > 0) {

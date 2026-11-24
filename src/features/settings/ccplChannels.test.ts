@@ -16,8 +16,10 @@ vi.mock("@/lib/ipc", () => ({
 import {
   applyCcplChannels,
   buildCcplChannels,
+  ccplCodexModels,
   ccplEnginesFor,
   CCPL_CHANNEL_ID,
+  CCPL_GEMINI_MODELS,
   migrateCcplChannels,
   resetCcplMigrationForTests,
   withoutLegacyCcplModels,
@@ -65,7 +67,7 @@ describe("applyCcplChannels", () => {
     expect(ccplEnginesFor("anthropic")).toEqual(["claude"]);
     expect(ccplEnginesFor("codex")).toEqual(["codex"]);
     expect(ccplEnginesFor("grok")).toEqual(["grok"]);
-    expect(ccplEnginesFor("antigravity")).toEqual([]);
+    expect(ccplEnginesFor("antigravity")).toEqual(["codex"]);
     expect(ccplEnginesFor("")).toEqual(["claude", "codex", "grok"]);
   });
 
@@ -93,14 +95,34 @@ describe("applyCcplChannels", () => {
     expect(result).toEqual({ written: ["codex"], removed: ["claude"] });
   });
 
-  it("writes nothing for a Gemini group but still clears its unusable leftovers", async () => {
+  it("writes a Gemini-only token into Codex with a Gemini default model", async () => {
     getCliConfig.mockResolvedValue({
-      codex: { providers: { [CCPL_CHANNEL_ID]: { apiKey: "sk-ccpl-g" } }, current: null },
+      claude: { providers: { [CCPL_CHANNEL_ID]: { apiKey: "sk-ccpl-g" } }, current: null },
     });
     const result = await applyCcplChannels("https://cc.example.com", "sk-ccpl-g", "bob", true, "antigravity");
-    expect(upsertProvider).not.toHaveBeenCalled();
-    expect(setCurrentProvider).not.toHaveBeenCalled();
-    expect(result).toEqual({ written: [], removed: ["codex"] });
+    expect(result).toEqual({ written: ["codex"], removed: ["claude"], geminiViaCodex: true });
+    expect(setCurrentProvider.mock.calls).toEqual([["codex", CCPL_CHANNEL_ID]]);
+    const [engine, , json] = upsertProvider.mock.calls[0] as [string, string, { model: string; extraModels: string[]; settingsConfig: { config: string } }];
+    expect(engine).toBe("codex");
+    expect(json.model).toBe("gemini-4-neon");
+    expect(json.settingsConfig.config).toContain('model = "gemini-4-neon"');
+    expect(json.settingsConfig.config).toContain('wire_api = "responses"');
+    expect(json.extraModels).toEqual(CCPL_GEMINI_MODELS.filter((m) => m !== "gemini-4-neon"));
+  });
+
+  it("keeps the Codex model and adds Gemini models when the token has both groups", async () => {
+    const result = await applyCcplChannels("https://cc.example.com", "sk-ccpl-cg", "bob", true, ["codex", "antigravity"]);
+    expect(result).toEqual({ written: ["codex"], removed: [], geminiViaCodex: true });
+    const json = upsertProvider.mock.calls[0]![2] as { model: string; extraModels: string[] };
+    expect(json.model).toBe("gpt-5.1-codex");
+    expect(json.extraModels).toEqual([...CCPL_GEMINI_MODELS]);
+  });
+
+  it("adds no Gemini models to a plain Codex token", async () => {
+    await applyCcplChannels("https://cc.example.com", "sk-ccpl-c", "bob", true, ["anthropic", "codex"]);
+    const codex = upsertProvider.mock.calls.find((c) => c[0] === "codex")![2] as Record<string, unknown>;
+    expect(codex.extraModels).toBeUndefined();
+    expect(ccplCodexModels(["codex"])).toEqual({ extraModels: [] });
   });
 
   it("upserts one fixed-id channel per engine and activates when the group is unknown", async () => {

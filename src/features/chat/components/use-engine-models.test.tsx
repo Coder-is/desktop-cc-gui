@@ -216,6 +216,34 @@ describe("useEngineModels channel models", () => {
     expect(rows[0]?.label).toBe("DeepSeek-V4-Pro");
     expect(rows[0]?.description).toBe("Stronger agentic coding");
   });
+
+  it("渠道的 extraModels 跟在渠道模型后面，选中后不被权威目录重置", async () => {
+    // ccpl 令牌同时能用 Codex 和反重力：Codex 渠道模型是 GPT，Gemini 模型放在 extraModels 里。
+    vi.mocked(ipc.getCliConfig).mockResolvedValue({
+      ...cliConfigWith(EMPTY_SECTION),
+      codex: {
+        current: "ccpl-account",
+        providers: {
+          "ccpl-account": { name: "ccpl", model: "gpt-5.1-codex", extraModels: ["gemini-4-neon", "gpt-5.1-codex", "", "gemini-4-carbon"] },
+        },
+      },
+    });
+    vi.mocked(ipc.listEngineModels).mockResolvedValue({
+      models: [{ id: "gpt-5.5", name: "GPT-5.5" }],
+      authoritative: true,
+    } as unknown as EngineCatalog);
+    const pinModels = vi.fn(async () => {});
+    engines = [engineInfo("codex", true)];
+    await render({ models: { codex: "gemini-4-carbon" }, pinModels });
+    await settle();
+    expect(latest.modelsByEngine.codex?.map((m) => m.id)).toEqual([
+      "gpt-5.1-codex",
+      "gemini-4-neon",
+      "gemini-4-carbon",
+      "gpt-5.5",
+    ]);
+    expect(pinModels).not.toHaveBeenCalled();
+  });
 });
 
 describe("useEngineModels pin effect", () => {

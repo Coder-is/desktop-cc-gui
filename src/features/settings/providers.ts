@@ -112,6 +112,17 @@ export function providerModel(engine: EngineId, raw: unknown): string {
 }
 
 /**
+ * 渠道除 `model` 之外还能服务的模型（`extraModels` 字符串数组），模型列表里跟在渠道模型后面。
+ * 目前是 ccpl 渠道在用：一个令牌同时能用 Codex 和反重力分组时，Codex 渠道的 model 是 GPT，
+ * Gemini 模型放这里，用户在 Codex 引擎里也能选到（ccpl 按模型名分到反重力分组）。
+ */
+export function providerExtraModels(raw: unknown): string[] {
+  const o = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+  if (!Array.isArray(o.extraModels)) return [];
+  return [...new Set(o.extraModels.map((m) => asString(m).trim()).filter(Boolean))];
+}
+
+/**
  * Per-engine env keys backing the flat baseUrl/apiKey/model fields, mirroring
  * the backend provider_files::env_mapping() table. Legacy imported channels (ccswitch shape)
  * carry these inside settingsConfig.env/env, and the backend lets raw env win

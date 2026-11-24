@@ -7,6 +7,7 @@ import {
   CLI_CONFIG_CHANGED_EVENT,
   isPseudoProvider,
   providerEntries,
+  providerExtraModels,
   providerFamilyModels,
   providerModel,
   PSEUDO_LOCAL,
@@ -237,7 +238,11 @@ export function useEngineModels(
         engine.id,
         channelRaw(engine.id, cliConfig, providers[engine.id]),
       );
-      const providerModels = configured ? [configured] : [];
+      // 渠道模型在前，渠道声明的额外模型（extraModels，比如 ccpl 的 Gemini）紧跟其后。
+      const providerModels = [
+        ...(configured ? [configured] : []),
+        ...providerExtraModels(channelRaw(engine.id, cliConfig, providers[engine.id])),
+      ];
       const current = resolveCompositeId(models[engine.id]?.trim() ?? "", catalogIds);
       // Remote workspace (WSL distro): local channel/custom models cannot
       // run there — the distro CLI's own list is the entire menu.
@@ -302,6 +307,8 @@ export function useEngineModels(
       // authoritative-catalog reset on local workspaces only.
       if (!catalogs[engine.id]?.remote) {
         if (configured) ids.add(configured);
+        // 渠道的额外模型也算能用：否则权威目录（codex debug models）会把选好的 Gemini 模型重置掉。
+        for (const id of providerExtraModels(channelRaw(engine.id, cliConfig))) ids.add(id);
         for (const id of customModels[engine.id] ?? []) ids.add(id);
       }
       result[engine.id] = ids;

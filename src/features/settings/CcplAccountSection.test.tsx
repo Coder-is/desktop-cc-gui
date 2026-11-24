@@ -22,7 +22,12 @@ vi.mock("@/lib/ipc", () => ({
   },
 }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async () => () => {}) }));
-const applyCcplChannels = vi.fn(async (..._args: unknown[]) => ({ written: ["claude"], removed: [] as string[] }));
+const applyCcplChannels = vi.fn(
+  async (..._args: unknown[]): Promise<{ written: string[]; removed: string[]; geminiViaCodex?: boolean }> => ({
+    written: ["claude"],
+    removed: [],
+  }),
+);
 vi.mock("./ccplChannels", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./ccplChannels")>()),
   applyCcplChannels: (...args: unknown[]) => applyCcplChannels(...args),
@@ -112,8 +117,8 @@ describe("CcplAccountSection token sign-in", () => {
     expect(container.textContent).toContain(i18n.t("ccplAccount.signedInOk", { engines: "Claude" }));
   });
 
-  it("says so when the token's group has no engine here and reports removed stale channels", async () => {
-    applyCcplChannels.mockResolvedValueOnce({ written: [], removed: ["claude", "codex"] });
+  it("points a Gemini token at the Codex engine and reports removed stale channels", async () => {
+    applyCcplChannels.mockResolvedValueOnce({ written: ["codex"], removed: ["claude"], geminiViaCodex: true });
     ccplTokenLogin.mockResolvedValue({
       baseUrl: "https://cc.example.com",
       username: "alice",
@@ -125,8 +130,9 @@ describe("CcplAccountSection token sign-in", () => {
     await act(async () => type(input(i18n.t("ccplAccount.token")), "sk-ccpl-gem"));
     await act(async () => button(i18n.t("ccplAccount.tokenSubmit")).click());
 
-    expect(container.textContent).toContain(i18n.t("ccplAccount.signedInNoEngine", { group: "Gemini (Antigravity)" }));
-    expect(container.textContent).toContain(i18n.t("ccplAccount.removedStale", { engines: "Claude / Codex" }));
+    expect(container.textContent).toContain(i18n.t("ccplAccount.signedInOk", { engines: "Codex" }));
+    expect(container.textContent).toContain(i18n.t("ccplAccount.geminiViaCodex"));
+    expect(container.textContent).toContain(i18n.t("ccplAccount.removedStale", { engines: "Claude" }));
     expect(container.textContent).toContain(i18n.t("ccplAccount.quotaPendingNote"));
   });
 

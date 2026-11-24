@@ -216,6 +216,7 @@ export function CcplAccountSection() {
               group: session.provider ? GROUP_NAMES[session.provider] : "",
             }),
       );
+      if (result.geminiViaCodex) notices.push(t("ccplAccount.geminiViaCodex"));
       if (result.removed.length > 0) {
         notices.push(t("ccplAccount.removedStale", { engines: engineList(result.removed) }));
       }
@@ -380,7 +381,7 @@ export function CcplAccountSection() {
                     groupChanged
                       ? t("ccplAccount.groupChanged", { group: GROUP_NAMES[currentGroup] })
                       : currentGroup === "antigravity"
-                        ? t("ccplAccount.groupNoEngine")
+                        ? t("ccplAccount.groupViaCodex")
                         : t("ccplAccount.groupDesc")
                   }
                 >
