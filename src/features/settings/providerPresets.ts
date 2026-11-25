@@ -24,7 +24,7 @@ import type { EngineId } from "./providers";
  *  (设置 → 接入): the Claude group accepts Claude Code, the Codex group
  *  accepts Codex, the Grok group accepts Grok Build by default. Self-hosted
  *  deployments just edit the URL after picking the preset. */
-export const CCPL_BASE_URL = "https://cc.ponicedance.com:9443";
+export const CCPL_BASE_URL = "https://ccpl.loifnk.uk";
 
 export interface ProviderPreset {
   /** Brand-literal display name (same convention as CLI_DISPLAY_NAMES). */
