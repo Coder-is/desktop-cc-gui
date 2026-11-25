@@ -240,4 +240,58 @@ export async function migrateCcplChannels(): Promise<boolean> {
 /** Test hook: allow another migration run. */
 export function resetCcplMigrationForTests() {
   migrated = false;
+  synced = false;
+}
+
+let synced = false;
+
+function sameModels(a: readonly string[], b: readonly string[]): boolean {
+  return a.length === b.length && a.every((m, i) => m === b[i]);
+}
+
+type CliConfigView = Record<string, { providers?: Record<string, unknown>; current?: unknown } | undefined>;
+
+/** The token stored in any existing ccpl channel (the account status only has a hint). */
+function storedCcplToken(config: CliConfigView): string {
+  for (const engine of CCPL_ENGINES) {
+    const channel = config[engine]?.providers?.[CCPL_CHANNEL_ID] as { apiKey?: unknown } | undefined;
+    if (typeof channel?.apiKey === "string" && channel.apiKey) return channel.apiKey;
+  }
+  return "";
+}
+
+/** Once per app session, for an account that is already signed in: ask the
+ *  server which group types the token has now and bring the channels in line
+ *  when they differ — a channel missing for an engine the token can use, or
+ *  the Codex channel's Gemini models out of date (the account was signed in on
+ *  a version without 反重力 support, or the admin added a 反重力 group later).
+ *  Without this, such users had to sign out and in again to see the Gemini
+ *  models. An engine with no current channel gets the new one as current; an
+ *  engine already pointing elsewhere is left alone. */
+export async function syncCcplChannels(status: { baseUrl: string; username: string; provider: CcplProvider | "" }): Promise<boolean> {
+  if (synced) return false;
+  synced = true;
+  try {
+    const me = await ipc.ccplMe("24h").catch(() => null);
+    const providers: readonly CcplProvider[] = me?.providers?.length ? me.providers : status.provider ? [status.provider] : [];
+    if (providers.length === 0 || !status.baseUrl) return false;
+    const config = (await ipc.getCliConfig()) as unknown as CliConfigView;
+    const token = storedCcplToken(config);
+    if (!token) return false;
+    const targets = ccplEnginesForAll(providers);
+    const missing = targets.filter((engine) => !config[engine]?.providers?.[CCPL_CHANNEL_ID]);
+    const codex = config.codex?.providers?.[CCPL_CHANNEL_ID] as { extraModels?: unknown } | undefined;
+    const want = ccplCodexModels(providers).extraModels;
+    const have = Array.isArray(codex?.extraModels) ? (codex.extraModels as unknown[]).map(String) : [];
+    const staleModels = targets.includes("codex") && !!codex && !sameModels(have, want);
+    if (missing.length === 0 && !staleModels) return false;
+    await applyCcplChannels(status.baseUrl, token, status.username, false, providers);
+    for (const engine of missing) {
+      if (!config[engine]?.current) await ipc.setCurrentProvider(engine, CCPL_CHANNEL_ID);
+    }
+    return true;
+  } catch {
+    synced = false;
+    return false;
+  }
 }

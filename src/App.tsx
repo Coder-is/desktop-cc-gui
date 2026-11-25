@@ -23,6 +23,7 @@ import { isWeb } from "@/lib/platform";
 import { readStoredBool } from "@/lib/storage";
 import { WEB_ACCESS_AUTO_START_KEY } from "@/features/settings/web-access-keys";
 import { NativeTitleTooltip } from "@/components/base/tooltip/native-title-tooltip";
+import { syncCcplChannels } from "@/features/settings/ccplChannels";
 
 // Settings is a rare route; load it on demand so startup ships less JS.
 // Warm the chunk shortly after startup so the first click has no fetch gap.
@@ -75,6 +76,18 @@ function MainApp() {
   useEffect(() => {
     if (import.meta.env.DEV) return;
     const id = setTimeout(() => void useUpdateStore.getState().checkForUpdates(), 3000);
+    return () => clearTimeout(id);
+  }, []);
+  // 已登录 ccpl 账号：启动后问一次服务器令牌现在有哪些分组，把渠道补齐（比如加了反重力分组，
+  // Codex 引擎里要出现 Gemini 模型），不用退出重登。账号菜单本身照旧不发网络请求。
+  useEffect(() => {
+    if (isWeb) return;
+    const id = setTimeout(() => {
+      void ipc
+        .ccplAccountStatus()
+        .then((status) => (status.signedIn ? syncCcplChannels(status) : false))
+        .catch(() => {});
+    }, 2500);
     return () => clearTimeout(id);
   }, []);
   // LAN web access autostart: starts the LAN bridge on launch when enabled in

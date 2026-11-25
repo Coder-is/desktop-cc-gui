@@ -4,12 +4,14 @@ const upsertProvider = vi.fn(async (..._args: unknown[]) => {});
 const setCurrentProvider = vi.fn(async (..._args: unknown[]) => {});
 const deleteProvider = vi.fn(async (..._args: unknown[]) => {});
 const getCliConfig = vi.fn(async () => ({}) as Record<string, unknown>);
+const ccplMe = vi.fn(async (..._args: unknown[]) => ({}) as Record<string, unknown>);
 vi.mock("@/lib/ipc", () => ({
   ipc: {
     upsertProvider: (...args: unknown[]) => upsertProvider(...args),
     setCurrentProvider: (...args: unknown[]) => setCurrentProvider(...args),
     deleteProvider: (...args: unknown[]) => deleteProvider(...args),
     getCliConfig: () => getCliConfig(),
+    ccplMe: (...args: unknown[]) => ccplMe(...args),
   },
 }));
 
@@ -22,6 +24,7 @@ import {
   CCPL_GEMINI_MODELS,
   migrateCcplChannels,
   resetCcplMigrationForTests,
+  syncCcplChannels,
   withoutLegacyCcplModels,
 } from "./ccplChannels";
 import { parseCcplError, usd } from "./CcplAccountSection";
@@ -205,5 +208,62 @@ describe("legacy ccpl model mapping", () => {
     // Second run in the same session does nothing.
     expect(await migrateCcplChannels()).toBe(false);
     expect(upsertProvider).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("syncCcplChannels", () => {
+  const status = { baseUrl: "https://cc.example.com", username: "bob", provider: "anthropic" as const };
+  beforeEach(() => {
+    resetCcplMigrationForTests();
+    upsertProvider.mockClear();
+    setCurrentProvider.mockClear();
+    deleteProvider.mockClear();
+    getCliConfig.mockReset();
+    ccplMe.mockReset();
+  });
+
+  it("adds the Gemini models to an existing Codex channel signed in before 反重力 support", async () => {
+    ccplMe.mockResolvedValue({ providers: ["anthropic", "codex", "antigravity"] });
+    getCliConfig.mockResolvedValue({
+      claude: { current: CCPL_CHANNEL_ID, providers: { [CCPL_CHANNEL_ID]: { apiKey: "sk-ccpl-old" } } },
+      codex: { current: CCPL_CHANNEL_ID, providers: { [CCPL_CHANNEL_ID]: { apiKey: "sk-ccpl-old" } } },
+    });
+    expect(await syncCcplChannels(status)).toBe(true);
+    const codex = upsertProvider.mock.calls.find((c) => c[0] === "codex")![2] as { apiKey: string; extraModels: string[] };
+    expect(codex.apiKey).toBe("sk-ccpl-old");
+    expect(codex.extraModels).toEqual([...CCPL_GEMINI_MODELS]);
+    // 已有的当前渠道不动
+    expect(setCurrentProvider).not.toHaveBeenCalled();
+    // 同一次启动只跑一次
+    expect(await syncCcplChannels(status)).toBe(false);
+  });
+
+  it("writes a missing Codex channel and makes it current when the engine has none", async () => {
+    ccplMe.mockResolvedValue({ providers: ["anthropic", "antigravity"] });
+    getCliConfig.mockResolvedValue({
+      claude: { current: CCPL_CHANNEL_ID, providers: { [CCPL_CHANNEL_ID]: { apiKey: "sk-ccpl-x" } } },
+    });
+    expect(await syncCcplChannels(status)).toBe(true);
+    expect(upsertProvider.mock.calls.map((c) => c[0])).toEqual(["claude", "codex"]);
+    expect(setCurrentProvider.mock.calls).toEqual([["codex", CCPL_CHANNEL_ID]]);
+    const codex = upsertProvider.mock.calls[1]![2] as { model: string };
+    expect(codex.model).toBe("gemini-4-neon");
+  });
+
+  it("does nothing when the channels already match the token's groups", async () => {
+    ccplMe.mockResolvedValue({ providers: ["anthropic", "codex", "antigravity"] });
+    getCliConfig.mockResolvedValue({
+      claude: { providers: { [CCPL_CHANNEL_ID]: { apiKey: "sk-ccpl-x" } } },
+      codex: { providers: { [CCPL_CHANNEL_ID]: { apiKey: "sk-ccpl-x", extraModels: [...CCPL_GEMINI_MODELS] } } },
+    });
+    expect(await syncCcplChannels(status)).toBe(false);
+    expect(upsertProvider).not.toHaveBeenCalled();
+  });
+
+  it("does nothing without a stored token or when the server is unreachable", async () => {
+    ccplMe.mockRejectedValue(new Error("offline"));
+    getCliConfig.mockResolvedValue({});
+    expect(await syncCcplChannels({ ...status, provider: "" })).toBe(false);
+    expect(upsertProvider).not.toHaveBeenCalled();
   });
 });
